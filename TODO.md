@@ -67,13 +67,13 @@ moving to the next.
 
 ---
 
-## Block 7 — Roadmap features
+## Block 7 — Roadmap features ✅
 > Depends on Blocks 1–5 being stable.
 
-- [ ] Priority queue routing — bind separate queues for
+- [x] Priority queue routing — bind separate queues for
       `event.*.high`, `event.*.normal`, `event.*.low` with different
       consumer prefetch counts
-- [ ] DLQ replay endpoint — `POST /dlq/{queue}/replay` re-publishes
+- [x] DLQ replay endpoint — `POST /dlq/{queue}/replay` re-publishes
       messages from the DLQ back to the main exchange
-- [ ] gRPC producer API — add `proto/event.proto` and a gRPC server
+- [x] gRPC producer API — add `proto/event.proto` and a gRPC server
       alongside the existing HTTP server in `cmd/producer`
