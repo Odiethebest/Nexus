@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"nexus/internal/broker"
 	"nexus/internal/idempotency"
 	"nexus/internal/mailer"
+	"nexus/internal/metrics"
 	"nexus/internal/store"
 )
 
@@ -88,6 +90,9 @@ func (w *EmailWorker) Run(ctx context.Context) error {
 }
 
 func (w *EmailWorker) process(ctx context.Context, d amqp.Delivery) {
+	start := time.Now()
+	defer func() { metrics.ProcessDuration.WithLabelValues("email").Observe(time.Since(start).Seconds()) }()
+
 	ok, err := w.idempotency.Check(ctx, d.MessageId)
 	if err != nil {
 		slog.Error("email: idempotency check failed", "msg_id", d.MessageId, "err", err)
@@ -96,6 +101,7 @@ func (w *EmailWorker) process(ctx context.Context, d amqp.Delivery) {
 	}
 	if !ok {
 		slog.Info("email: duplicate message, skipping", "msg_id", d.MessageId)
+		metrics.MessagesProcessed.WithLabelValues("email", "duplicate").Inc()
 		d.Ack(false)
 		return
 	}
@@ -110,10 +116,11 @@ func (w *EmailWorker) process(ctx context.Context, d amqp.Delivery) {
 	status := "delivered"
 	if err := w.send(event); err != nil {
 		slog.Error("email: send failed", "msg_id", event.MessageID, "err", err)
-		status = "failed"
+		metrics.MessagesProcessed.WithLabelValues("email", "failed").Inc()
 		d.Nack(false, true)
 		return
 	}
+	metrics.MessagesProcessed.WithLabelValues("email", "delivered").Inc()
 
 	if err := w.store.SaveNotification(ctx, store.Notification{
 		MessageID: event.MessageID,

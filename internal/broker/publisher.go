@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"nexus/internal/metrics"
 )
 
 // Event is the canonical message payload published to the exchange.
@@ -53,6 +54,7 @@ func (p *Publisher) openChannel() error {
 // It waits for a broker ack before returning. On channel failure it reopens
 // the channel and retries once.
 func (p *Publisher) Publish(ctx context.Context, eventType, priority string, payload map[string]any) (string, error) {
+	start := time.Now()
 	id, err := uuid.NewV7()
 	if err != nil {
 		return "", fmt.Errorf("publisher: generate uuid: %w", err)
@@ -83,6 +85,9 @@ func (p *Publisher) Publish(ctx context.Context, eventType, priority string, pay
 			return "", err
 		}
 	}
+
+	metrics.PublishDuration.Observe(time.Since(start).Seconds())
+	metrics.MessagesPublished.WithLabelValues(eventType, priority).Inc()
 
 	return event.MessageID, nil
 }

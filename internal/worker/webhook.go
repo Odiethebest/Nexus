@@ -13,6 +13,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"nexus/internal/broker"
 	"nexus/internal/idempotency"
+	"nexus/internal/metrics"
 	"nexus/internal/store"
 )
 
@@ -97,6 +98,9 @@ func (w *WebhookWorker) Run(ctx context.Context) error {
 }
 
 func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
+	start := time.Now()
+	defer func() { metrics.ProcessDuration.WithLabelValues("webhook").Observe(time.Since(start).Seconds()) }()
+
 	ok, err := w.idempotency.Check(ctx, d.MessageId)
 	if err != nil {
 		slog.Error("webhook: idempotency check failed", "msg_id", d.MessageId, "err", err)
@@ -105,6 +109,7 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 	}
 	if !ok {
 		slog.Info("webhook: duplicate message, skipping", "msg_id", d.MessageId)
+		metrics.MessagesProcessed.WithLabelValues("webhook", "duplicate").Inc()
 		d.Ack(false)
 		return
 	}
@@ -120,6 +125,7 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 	deathCount := xDeathCount(d)
 	if deathCount >= maxRetries {
 		slog.Warn("webhook: max retries exceeded, routing to DLQ", "msg_id", event.MessageID)
+		metrics.MessagesProcessed.WithLabelValues("webhook", "dlq").Inc()
 		d.Nack(false, false)
 		return
 	}
@@ -129,10 +135,12 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 		backoff := time.Duration(math.Pow(2, float64(deathCount+1))) * time.Second
 		slog.Error("webhook: delivery failed, requeuing",
 			"msg_id", event.MessageID, "attempt", deathCount+1, "backoff", backoff, "err", err)
+		metrics.MessagesProcessed.WithLabelValues("webhook", "failed").Inc()
 		time.Sleep(backoff)
 		d.Nack(false, true)
 		return
 	}
+	metrics.MessagesProcessed.WithLabelValues("webhook", "delivered").Inc()
 
 	if err := w.store.SaveNotification(ctx, store.Notification{
 		MessageID: event.MessageID,

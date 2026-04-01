@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"nexus/internal/broker"
 	"nexus/internal/hub"
 	"nexus/internal/idempotency"
+	"nexus/internal/metrics"
 	"nexus/internal/store"
 )
 
@@ -87,6 +89,9 @@ func (w *InAppWorker) Run(ctx context.Context) error {
 }
 
 func (w *InAppWorker) process(ctx context.Context, d amqp.Delivery) {
+	start := time.Now()
+	defer func() { metrics.ProcessDuration.WithLabelValues("inapp").Observe(time.Since(start).Seconds()) }()
+
 	ok, err := w.idempotency.Check(ctx, d.MessageId)
 	if err != nil {
 		slog.Error("inapp: idempotency check failed", "msg_id", d.MessageId, "err", err)
@@ -95,6 +100,7 @@ func (w *InAppWorker) process(ctx context.Context, d amqp.Delivery) {
 	}
 	if !ok {
 		slog.Info("inapp: duplicate message, skipping", "msg_id", d.MessageId)
+		metrics.MessagesProcessed.WithLabelValues("inapp", "duplicate").Inc()
 		d.Ack(false)
 		return
 	}
@@ -108,6 +114,7 @@ func (w *InAppWorker) process(ctx context.Context, d amqp.Delivery) {
 
 	w.hub.Broadcast(d.Body)
 	slog.Info("inapp: broadcast to hub", "msg_id", event.MessageID, "type", event.Type)
+	metrics.MessagesProcessed.WithLabelValues("inapp", "delivered").Inc()
 
 	if err := w.store.SaveNotification(ctx, store.Notification{
 		MessageID: event.MessageID,
