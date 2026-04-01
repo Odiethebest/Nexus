@@ -24,8 +24,8 @@ const CARD_STYLE = {
   },
 }
 
-function sysTime(date) {
-  const mins = Math.floor((Date.now() - new Date(date)) / 60000)
+function sysTime(date, now) {
+  const mins = Math.floor((now - new Date(date)) / 60000)
   return `SYS_TIME: ${mins < 1 ? 'NOW' : `${mins}M`}`
 }
 
@@ -87,45 +87,47 @@ function PublishPanel({ onPublished }) {
   if (transmitted)  btnLabel = '[ TRANSMITTED ]'
 
   return (
-    <div className="panel">
-      <span className="panel-title">
-        <span className="slash">╱</span> Publish Event
-      </span>
-
+    <div className="panel publish-panel">
       <form onSubmit={handleSubmit} style={{ display: 'contents' }}>
-        <div className="field-group">
-          <label className="field-label">Type</label>
-          <input
-            type="text"
-            value={type}
-            onChange={e => setType(e.target.value)}
-            placeholder="order / payment / alert"
-            required
-          />
-        </div>
+        <div className="publish-fields">
+          <span className="panel-title">
+            <span className="slash">╱</span> Publish Event
+          </span>
 
-        <div className="field-group">
-          <label className="field-label">
-            Priority
-            <PriorityBadge priority={priority} />
-          </label>
-          <select value={priority} onChange={e => setPriority(e.target.value)}>
-            <option value="high">High</option>
-            <option value="normal">Normal</option>
-            <option value="low">Low</option>
-          </select>
-        </div>
+          <div className="field-group">
+            <label className="field-label">Type</label>
+            <input
+              type="text"
+              value={type}
+              onChange={e => setType(e.target.value)}
+              placeholder="order / payment / alert"
+              required
+            />
+          </div>
 
-        <div className="field-group">
-          <label className="field-label">Payload (JSON)</label>
-          <textarea
-            value={payload}
-            onChange={e => setPayload(e.target.value)}
-            rows={4}
-          />
-        </div>
+          <div className="field-group">
+            <label className="field-label">
+              Priority
+              <PriorityBadge priority={priority} />
+            </label>
+            <select value={priority} onChange={e => setPriority(e.target.value)}>
+              <option value="high">High</option>
+              <option value="normal">Normal</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
 
-        {error && <p className="form-error">// ERR: {error}</p>}
+          <div className="field-group">
+            <label className="field-label">Payload (JSON)</label>
+            <textarea
+              value={payload}
+              onChange={e => setPayload(e.target.value)}
+              rows={4}
+            />
+          </div>
+
+          {error && <p className="form-error">// ERR: {error}</p>}
+        </div>
 
         <button
           className={`publish-btn${transmitted ? ' publish-btn--transmitted' : ''}`}
@@ -163,8 +165,24 @@ function SkeletonFeed() {
   )
 }
 
+const PRIORITY_ORDER = { high: 0, normal: 1, low: 2 }
+
 // ── NotificationsPanel ────────────────────────────────────────
 function NotificationsPanel({ notifications, initialising }) {
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(t)
+  }, [])
+
+  const sorted = [...notifications].sort((a, b) => {
+    const pa = PRIORITY_ORDER[a.priority] ?? 1
+    const pb = PRIORITY_ORDER[b.priority] ?? 1
+    if (pa !== pb) return pa - pb
+    return new Date(b.timestamp) - new Date(a.timestamp)
+  })
+
   const count = notifications.length
 
   return (
@@ -183,7 +201,7 @@ function NotificationsPanel({ notifications, initialising }) {
           <EmptyState />
         ) : (
           <div className="notif-list">
-            {notifications.map((n, i) => {
+            {sorted.map((n, i) => {
               const cardStyle = CARD_STYLE[n.priority] ?? CARD_STYLE.normal
               return (
                 <div
@@ -195,7 +213,7 @@ function NotificationsPanel({ notifications, initialising }) {
                     <span className="notif-card__type">{n.type}</span>
                     <div className="notif-card__meta">
                       <PriorityBadge priority={n.priority} />
-                      <span className="notif-card__time">{sysTime(n.timestamp)}</span>
+                      <span className="notif-card__time">{sysTime(n.timestamp, now)}</span>
                     </div>
                   </div>
                   <span className="notif-card__payload">{fmtPayload(n.payload)}</span>
