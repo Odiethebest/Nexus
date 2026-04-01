@@ -27,12 +27,12 @@ moving to the next.
 
 ---
 
-## Block 3 — Email worker delivery
+## Block 3 — Email worker delivery ✅
 > Depends on Block 1 (env vars for SMTP credentials).
 
-- [ ] Integrate a real email provider in `internal/worker/email.go`
+- [x] Integrate a real email provider in `internal/worker/email.go`
       (SMTP via `net/smtp`, or a provider SDK such as Resend / SendGrid)
-- [ ] Add `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`,
+- [x] Add `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`,
       `EMAIL_FROM` to `.env.example`
 
 ---
