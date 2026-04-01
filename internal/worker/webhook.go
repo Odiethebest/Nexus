@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -26,75 +27,105 @@ const (
 
 // WebhookWorker delivers events to outbound HTTP endpoints with exponential backoff.
 type WebhookWorker struct {
-	ch          *amqp.Channel
+	conn        *broker.Connection
 	httpClient  *http.Client
 	idempotency *idempotency.Client
 	store       *store.Store
 	poolSize    int
 }
 
-// NewWebhookWorker declares the queue/DLQ and returns a ready worker.
-func NewWebhookWorker(ch *amqp.Channel, idem *idempotency.Client, st *store.Store, poolSize int) (*WebhookWorker, error) {
+// NewWebhookWorker declares priority queues/DLQs and returns a ready worker.
+func NewWebhookWorker(conn *broker.Connection, idem *idempotency.Client, st *store.Store, poolSize int) (*WebhookWorker, error) {
 	if poolSize <= 0 {
 		poolSize = WebhookPoolSize
 	}
 	w := &WebhookWorker{
-		ch:          ch,
+		conn:        conn,
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
 		idempotency: idem,
 		store:       st,
 		poolSize:    poolSize,
 	}
-	if err := w.setup(); err != nil {
+
+	ch, err := conn.OpenChannel()
+	if err != nil {
+		return nil, fmt.Errorf("webhook worker: open setup channel: %w", err)
+	}
+	defer ch.Close()
+
+	if err := w.setup(ch); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
-func (w *WebhookWorker) setup() error {
-	if _, err := w.ch.QueueDeclare(WebhookDLQ, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("webhook worker: declare dlq: %w", err)
-	}
+func (w *WebhookWorker) setup(ch *amqp.Channel) error {
+	for _, lane := range broker.PriorityLanes {
+		q   := WebhookQueue + "." + lane.Name
+		dlq := WebhookDLQ  + "." + lane.Name
 
-	args := amqp.Table{
-		"x-dead-letter-exchange":    "",
-		"x-dead-letter-routing-key": WebhookDLQ,
+		if _, err := ch.QueueDeclare(dlq, true, false, false, false, nil); err != nil {
+			return fmt.Errorf("webhook worker: declare dlq %s: %w", dlq, err)
+		}
+		args := amqp.Table{
+			"x-dead-letter-exchange":    "",
+			"x-dead-letter-routing-key": dlq,
+		}
+		if _, err := ch.QueueDeclare(q, true, false, false, false, args); err != nil {
+			return fmt.Errorf("webhook worker: declare queue %s: %w", q, err)
+		}
+		if err := ch.QueueBind(q, lane.Binding, broker.ExchangeName, false, nil); err != nil {
+			return fmt.Errorf("webhook worker: bind %s: %w", q, err)
+		}
 	}
-	if _, err := w.ch.QueueDeclare(WebhookQueue, true, false, false, false, args); err != nil {
-		return fmt.Errorf("webhook worker: declare queue: %w", err)
-	}
-
-	if err := w.ch.QueueBind(WebhookQueue, "event.*.*", broker.ExchangeName, false, nil); err != nil {
-		return fmt.Errorf("webhook worker: bind queue: %w", err)
-	}
-
 	return nil
 }
 
-// Run starts consuming messages with a bounded goroutine pool.
+// Run starts one goroutine pool per priority lane.
 func (w *WebhookWorker) Run(ctx context.Context) error {
-	msgs, err := w.ch.Consume(WebhookQueue, "", false, false, false, false, nil)
-	if err != nil {
-		return fmt.Errorf("webhook worker: consume: %w", err)
-	}
+	prefetches := [3]int{w.poolSize, max(w.poolSize/2, 1), max(w.poolSize/4, 1)}
+	var wg sync.WaitGroup
 
-	sem := make(chan struct{}, w.poolSize)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case msg, ok := <-msgs:
-			if !ok {
-				return fmt.Errorf("webhook worker: channel closed")
-			}
-			sem <- struct{}{}
-			go func(d amqp.Delivery) {
-				defer func() { <-sem }()
-				w.process(ctx, d)
-			}(msg)
+	for i, lane := range broker.PriorityLanes {
+		ch, err := w.conn.OpenChannel()
+		if err != nil {
+			return fmt.Errorf("webhook worker: open channel %s: %w", lane.Name, err)
 		}
+
+		prefetch := prefetches[i]
+		if err := ch.Qos(prefetch, 0, false); err != nil {
+			return fmt.Errorf("webhook worker: qos %s: %w", lane.Name, err)
+		}
+
+		msgs, err := ch.Consume(WebhookQueue+"."+lane.Name, "", false, false, false, false, nil)
+		if err != nil {
+			return fmt.Errorf("webhook worker: consume %s: %w", lane.Name, err)
+		}
+
+		sem := make(chan struct{}, prefetch)
+		wg.Add(1)
+		go func(msgs <-chan amqp.Delivery, sem chan struct{}) {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case d, ok := <-msgs:
+					if !ok {
+						return
+					}
+					sem <- struct{}{}
+					go func(d amqp.Delivery) {
+						defer func() { <-sem }()
+						w.process(ctx, d)
+					}(d)
+				}
+			}
+		}(msgs, sem)
 	}
+
+	wg.Wait()
+	return ctx.Err()
 }
 
 func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
@@ -121,7 +152,6 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 
-	// Route to DLQ after maxRetries attempts.
 	deathCount := xDeathCount(d)
 	if deathCount >= maxRetries {
 		slog.Warn("webhook: max retries exceeded, routing to DLQ", "msg_id", event.MessageID)
@@ -131,7 +161,6 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 	}
 
 	if err := w.deliver(ctx, event, d.Body); err != nil {
-		// Exponential backoff: 2s → 4s → 8s
 		backoff := time.Duration(math.Pow(2, float64(deathCount+1))) * time.Second
 		slog.Error("webhook: delivery failed, requeuing",
 			"msg_id", event.MessageID, "attempt", deathCount+1, "backoff", backoff, "err", err)
@@ -158,7 +187,7 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 func (w *WebhookWorker) deliver(ctx context.Context, event broker.Event, body []byte) error {
 	webhookURL, _ := event.Payload["webhook_url"].(string)
 	if webhookURL == "" {
-		return nil // no target configured
+		return nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
@@ -177,11 +206,9 @@ func (w *WebhookWorker) deliver(ctx context.Context, event broker.Event, body []
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook: upstream returned %d", resp.StatusCode)
 	}
-
 	return nil
 }
 
-// xDeathCount extracts the x-death retry count from AMQP headers.
 func xDeathCount(d amqp.Delivery) int {
 	deaths, ok := d.Headers["x-death"].([]interface{})
 	if !ok || len(deaths) == 0 {

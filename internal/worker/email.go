@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -21,72 +22,103 @@ const (
 	EmailPoolSize = 10
 )
 
-// EmailWorker consumes from the email queue and delivers email notifications.
-// If m is nil the worker skips actual sending (useful when SMTP is not configured).
+// EmailWorker consumes from three priority lanes and delivers email notifications.
+// If m is nil, actual sending is skipped (useful when SMTP is not configured).
 type EmailWorker struct {
-	ch          *amqp.Channel
+	conn        *broker.Connection
 	mailer      *mailer.Mailer
 	idempotency *idempotency.Client
 	store       *store.Store
 	poolSize    int
 }
 
-// NewEmailWorker declares the queue/DLQ and returns a ready worker.
-func NewEmailWorker(ch *amqp.Channel, m *mailer.Mailer, idem *idempotency.Client, st *store.Store, poolSize int) (*EmailWorker, error) {
+// NewEmailWorker declares priority queues/DLQs and returns a ready worker.
+func NewEmailWorker(conn *broker.Connection, m *mailer.Mailer, idem *idempotency.Client, st *store.Store, poolSize int) (*EmailWorker, error) {
 	if poolSize <= 0 {
 		poolSize = EmailPoolSize
 	}
-	w := &EmailWorker{ch: ch, mailer: m, idempotency: idem, store: st, poolSize: poolSize}
-	if err := w.setup(); err != nil {
+	w := &EmailWorker{conn: conn, mailer: m, idempotency: idem, store: st, poolSize: poolSize}
+
+	ch, err := conn.OpenChannel()
+	if err != nil {
+		return nil, fmt.Errorf("email worker: open setup channel: %w", err)
+	}
+	defer ch.Close()
+
+	if err := w.setup(ch); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
-func (w *EmailWorker) setup() error {
-	if _, err := w.ch.QueueDeclare(EmailDLQ, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("email worker: declare dlq: %w", err)
-	}
+func (w *EmailWorker) setup(ch *amqp.Channel) error {
+	for _, lane := range broker.PriorityLanes {
+		q   := EmailQueue + "." + lane.Name
+		dlq := EmailDLQ  + "." + lane.Name
 
-	args := amqp.Table{
-		"x-dead-letter-exchange":    "",
-		"x-dead-letter-routing-key": EmailDLQ,
+		if _, err := ch.QueueDeclare(dlq, true, false, false, false, nil); err != nil {
+			return fmt.Errorf("email worker: declare dlq %s: %w", dlq, err)
+		}
+		args := amqp.Table{
+			"x-dead-letter-exchange":    "",
+			"x-dead-letter-routing-key": dlq,
+		}
+		if _, err := ch.QueueDeclare(q, true, false, false, false, args); err != nil {
+			return fmt.Errorf("email worker: declare queue %s: %w", q, err)
+		}
+		if err := ch.QueueBind(q, lane.Binding, broker.ExchangeName, false, nil); err != nil {
+			return fmt.Errorf("email worker: bind %s: %w", q, err)
+		}
 	}
-	if _, err := w.ch.QueueDeclare(EmailQueue, true, false, false, false, args); err != nil {
-		return fmt.Errorf("email worker: declare queue: %w", err)
-	}
-
-	if err := w.ch.QueueBind(EmailQueue, "event.*.*", broker.ExchangeName, false, nil); err != nil {
-		return fmt.Errorf("email worker: bind queue: %w", err)
-	}
-
 	return nil
 }
 
-// Run starts consuming messages with a bounded goroutine pool.
+// Run starts one goroutine pool per priority lane. High-priority lanes receive
+// a proportionally larger prefetch count so they drain faster under load.
 func (w *EmailWorker) Run(ctx context.Context) error {
-	msgs, err := w.ch.Consume(EmailQueue, "", false, false, false, false, nil)
-	if err != nil {
-		return fmt.Errorf("email worker: consume: %w", err)
-	}
+	prefetches := [3]int{w.poolSize, max(w.poolSize/2, 1), max(w.poolSize/4, 1)}
+	var wg sync.WaitGroup
 
-	sem := make(chan struct{}, w.poolSize)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case msg, ok := <-msgs:
-			if !ok {
-				return fmt.Errorf("email worker: channel closed")
-			}
-			sem <- struct{}{}
-			go func(d amqp.Delivery) {
-				defer func() { <-sem }()
-				w.process(ctx, d)
-			}(msg)
+	for i, lane := range broker.PriorityLanes {
+		ch, err := w.conn.OpenChannel()
+		if err != nil {
+			return fmt.Errorf("email worker: open channel %s: %w", lane.Name, err)
 		}
+
+		prefetch := prefetches[i]
+		if err := ch.Qos(prefetch, 0, false); err != nil {
+			return fmt.Errorf("email worker: qos %s: %w", lane.Name, err)
+		}
+
+		msgs, err := ch.Consume(EmailQueue+"."+lane.Name, "", false, false, false, false, nil)
+		if err != nil {
+			return fmt.Errorf("email worker: consume %s: %w", lane.Name, err)
+		}
+
+		sem := make(chan struct{}, prefetch)
+		wg.Add(1)
+		go func(msgs <-chan amqp.Delivery, sem chan struct{}) {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case d, ok := <-msgs:
+					if !ok {
+						return
+					}
+					sem <- struct{}{}
+					go func(d amqp.Delivery) {
+						defer func() { <-sem }()
+						w.process(ctx, d)
+					}(d)
+				}
+			}
+		}(msgs, sem)
 	}
+
+	wg.Wait()
+	return ctx.Err()
 }
 
 func (w *EmailWorker) process(ctx context.Context, d amqp.Delivery) {
@@ -113,7 +145,6 @@ func (w *EmailWorker) process(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 
-	status := "delivered"
 	if err := w.send(event); err != nil {
 		slog.Error("email: send failed", "msg_id", event.MessageID, "err", err)
 		metrics.MessagesProcessed.WithLabelValues("email", "failed").Inc()
@@ -126,7 +157,7 @@ func (w *EmailWorker) process(ctx context.Context, d amqp.Delivery) {
 		MessageID: event.MessageID,
 		Channel:   "email",
 		EventType: event.Type,
-		Status:    status,
+		Status:    "delivered",
 		Payload:   d.Body,
 	}); err != nil {
 		slog.Error("email: persist failed", "err", err)

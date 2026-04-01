@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -23,69 +24,99 @@ const (
 
 // InAppWorker broadcasts events to the WebSocket hub for real-time delivery.
 type InAppWorker struct {
-	ch          *amqp.Channel
+	conn        *broker.Connection
 	hub         *hub.Hub
 	idempotency *idempotency.Client
 	store       *store.Store
 	poolSize    int
 }
 
-// NewInAppWorker declares the queue/DLQ and returns a ready worker.
-func NewInAppWorker(ch *amqp.Channel, h *hub.Hub, idem *idempotency.Client, st *store.Store, poolSize int) (*InAppWorker, error) {
+// NewInAppWorker declares priority queues/DLQs and returns a ready worker.
+func NewInAppWorker(conn *broker.Connection, h *hub.Hub, idem *idempotency.Client, st *store.Store, poolSize int) (*InAppWorker, error) {
 	if poolSize <= 0 {
 		poolSize = InAppPoolSize
 	}
-	w := &InAppWorker{ch: ch, hub: h, idempotency: idem, store: st, poolSize: poolSize}
-	if err := w.setup(); err != nil {
+	w := &InAppWorker{conn: conn, hub: h, idempotency: idem, store: st, poolSize: poolSize}
+
+	ch, err := conn.OpenChannel()
+	if err != nil {
+		return nil, fmt.Errorf("inapp worker: open setup channel: %w", err)
+	}
+	defer ch.Close()
+
+	if err := w.setup(ch); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
-func (w *InAppWorker) setup() error {
-	if _, err := w.ch.QueueDeclare(InAppDLQ, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("inapp worker: declare dlq: %w", err)
-	}
+func (w *InAppWorker) setup(ch *amqp.Channel) error {
+	for _, lane := range broker.PriorityLanes {
+		q   := InAppQueue + "." + lane.Name
+		dlq := InAppDLQ  + "." + lane.Name
 
-	args := amqp.Table{
-		"x-dead-letter-exchange":    "",
-		"x-dead-letter-routing-key": InAppDLQ,
+		if _, err := ch.QueueDeclare(dlq, true, false, false, false, nil); err != nil {
+			return fmt.Errorf("inapp worker: declare dlq %s: %w", dlq, err)
+		}
+		args := amqp.Table{
+			"x-dead-letter-exchange":    "",
+			"x-dead-letter-routing-key": dlq,
+		}
+		if _, err := ch.QueueDeclare(q, true, false, false, false, args); err != nil {
+			return fmt.Errorf("inapp worker: declare queue %s: %w", q, err)
+		}
+		if err := ch.QueueBind(q, lane.Binding, broker.ExchangeName, false, nil); err != nil {
+			return fmt.Errorf("inapp worker: bind %s: %w", q, err)
+		}
 	}
-	if _, err := w.ch.QueueDeclare(InAppQueue, true, false, false, false, args); err != nil {
-		return fmt.Errorf("inapp worker: declare queue: %w", err)
-	}
-
-	if err := w.ch.QueueBind(InAppQueue, "event.*.*", broker.ExchangeName, false, nil); err != nil {
-		return fmt.Errorf("inapp worker: bind queue: %w", err)
-	}
-
 	return nil
 }
 
-// Run starts consuming messages with a bounded goroutine pool.
+// Run starts one goroutine pool per priority lane.
 func (w *InAppWorker) Run(ctx context.Context) error {
-	msgs, err := w.ch.Consume(InAppQueue, "", false, false, false, false, nil)
-	if err != nil {
-		return fmt.Errorf("inapp worker: consume: %w", err)
-	}
+	prefetches := [3]int{w.poolSize, max(w.poolSize/2, 1), max(w.poolSize/4, 1)}
+	var wg sync.WaitGroup
 
-	sem := make(chan struct{}, w.poolSize)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case msg, ok := <-msgs:
-			if !ok {
-				return fmt.Errorf("inapp worker: channel closed")
-			}
-			sem <- struct{}{}
-			go func(d amqp.Delivery) {
-				defer func() { <-sem }()
-				w.process(ctx, d)
-			}(msg)
+	for i, lane := range broker.PriorityLanes {
+		ch, err := w.conn.OpenChannel()
+		if err != nil {
+			return fmt.Errorf("inapp worker: open channel %s: %w", lane.Name, err)
 		}
+
+		prefetch := prefetches[i]
+		if err := ch.Qos(prefetch, 0, false); err != nil {
+			return fmt.Errorf("inapp worker: qos %s: %w", lane.Name, err)
+		}
+
+		msgs, err := ch.Consume(InAppQueue+"."+lane.Name, "", false, false, false, false, nil)
+		if err != nil {
+			return fmt.Errorf("inapp worker: consume %s: %w", lane.Name, err)
+		}
+
+		sem := make(chan struct{}, prefetch)
+		wg.Add(1)
+		go func(msgs <-chan amqp.Delivery, sem chan struct{}) {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case d, ok := <-msgs:
+					if !ok {
+						return
+					}
+					sem <- struct{}{}
+					go func(d amqp.Delivery) {
+						defer func() { <-sem }()
+						w.process(ctx, d)
+					}(d)
+				}
+			}
+		}(msgs, sem)
 	}
+
+	wg.Wait()
+	return ctx.Err()
 }
 
 func (w *InAppWorker) process(ctx context.Context, d amqp.Delivery) {
