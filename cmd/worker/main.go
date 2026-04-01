@@ -1,0 +1,112 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"os/signal"
+	"strconv"
+	"sync"
+	"syscall"
+
+	"github.com/redis/go-redis/v9"
+	"nexus/internal/broker"
+	"nexus/internal/hub"
+	"nexus/internal/idempotency"
+	"nexus/internal/store"
+	"nexus/internal/worker"
+)
+
+func main() {
+	amqpURL := getenv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
+	redisURL := getenv("REDIS_URL", "redis://localhost:6379")
+	pgDSN := getenv("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
+
+	emailPool := parseInt(getenv("EMAIL_WORKER_POOL", "10"))
+	inappPool := parseInt(getenv("INAPP_WORKER_POOL", "5"))
+	webhookPool := parseInt(getenv("WEBHOOK_WORKER_POOL", "8"))
+
+	conn, err := broker.New(amqpURL)
+	if err != nil {
+		slog.Error("failed to connect to broker", "err", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	opt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		slog.Error("invalid redis URL", "err", err)
+		os.Exit(1)
+	}
+	rdb := redis.NewClient(opt)
+	defer rdb.Close()
+
+	idem := idempotency.New(rdb)
+
+	st, err := store.New(pgDSN)
+	if err != nil {
+		slog.Error("failed to connect to store", "err", err)
+		os.Exit(1)
+	}
+	if err := st.Migrate(context.Background()); err != nil {
+		slog.Error("migration failed", "err", err)
+		os.Exit(1)
+	}
+
+	wsHub := hub.New()
+	ch := conn.Channel()
+
+	emailW, err := worker.NewEmailWorker(ch, idem, st, emailPool)
+	if err != nil {
+		slog.Error("failed to create email worker", "err", err)
+		os.Exit(1)
+	}
+
+	inappW, err := worker.NewInAppWorker(ch, wsHub, idem, st, inappPool)
+	if err != nil {
+		slog.Error("failed to create inapp worker", "err", err)
+		os.Exit(1)
+	}
+
+	webhookW, err := worker.NewWebhookWorker(ch, idem, st, webhookPool)
+	if err != nil {
+		slog.Error("failed to create webhook worker", "err", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var wg sync.WaitGroup
+	run := func(name string, fn func(context.Context) error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slog.Info("worker starting", "name", name)
+			if err := fn(ctx); err != nil && err != context.Canceled {
+				slog.Error("worker exited with error", "name", name, "err", err)
+			}
+		}()
+	}
+
+	run("email", emailW.Run)
+	run("inapp", inappW.Run)
+	run("webhook", webhookW.Run)
+
+	<-ctx.Done()
+	slog.Info("shutting down workers...")
+	wg.Wait()
+	slog.Info("all workers stopped")
+}
+
+func getenv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func parseInt(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
+}
