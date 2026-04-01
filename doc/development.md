@@ -50,6 +50,18 @@ Both binaries read configuration from environment variables. Copy `.env.example`
 | `POSTGRES_DSN` | `postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable` | PostgreSQL DSN |
 | `LISTEN_ADDR` | `:8080` | HTTP server listen address |
 | `GRPC_ADDR` | `:50051` | gRPC server listen address |
+| `LOADTEST_ENABLED` | `true` | Enables one-click loadtest endpoints (when implemented) |
+| `LOADTEST_ADMIN_KEY` | `replace_me` | Admin key required by loadtest start endpoint |
+| `LOADTEST_COOLDOWN_SECONDS` | `300` | Cooldown after each loadtest run |
+| `LOADTEST_MAX_PARALLEL` | `1` | Maximum concurrent loadtest runs |
+| `LOADTEST_POLL_INTERVAL_SECONDS` | `3` | Poll interval for loadtest status/metrics |
+| `LOADTEST_REQUEST_TIMEOUT_SECONDS` | `20` | Upstream k6 API timeout per request |
+| `K6_API_BASE` | `https://api.k6.io` | Grafana Cloud k6 API base URL |
+| `K6_API_TOKEN` | *(empty)* | Grafana Cloud k6 API token |
+| `K6_STACK_ID` | *(empty)* | Grafana stack ID passed in `X-Stack-Id` |
+| `K6_LOAD_TEST_ID` | *(empty)* | Existing k6 load test ID to trigger |
+| `LOADTEST_ALLOWED_ORIGINS` | *(empty)* | Optional origin allow-list for loadtest ops API |
+| `LOADTEST_BUDGET_VUH_PER_DAY` | `200` | Optional daily VUH budget cap |
 
 ### Worker (`cmd/worker`)
 
