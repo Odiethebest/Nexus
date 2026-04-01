@@ -37,13 +37,13 @@ moving to the next.
 
 ---
 
-## Block 4 — Frontend polish
+## Block 4 — Frontend polish ✅
 > Depends on Block 1 (npm install done).
 
-- [ ] Add `web/src/index.css` with a CSS reset and base styles
-- [ ] Import `index.css` in `web/src/main.jsx`
-- [ ] Replace inline styles in `App.jsx` with CSS classes
-- [ ] Add loading skeleton / empty-state illustration to `NotificationFeed`
+- [x] Add `web/src/index.css` with a CSS reset and base styles
+- [x] Import `index.css` in `web/src/main.jsx`
+- [x] Replace inline styles in `App.jsx` with CSS classes
+- [x] Add loading skeleton / empty-state illustration to `NotificationFeed`
 
 ---
 
