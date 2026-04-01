@@ -1,0 +1,6 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/Dockerfile.worker"
+
+[deploy]
+startCommand = "/app/worker"
