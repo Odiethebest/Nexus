@@ -1,6 +1,6 @@
 # Nexus
 
-A production-grade, message-driven notification system built in Go. Nexus routes application events through a RabbitMQ topic exchange to concurrent goroutine-pool workers, delivering notifications across multiple channels with idempotent consumers, dead letter queue handling, and real-time status streaming.
+A production-grade, message-driven notification system built in Go. Nexus routes application events through a RabbitMQ topic exchange to concurrent goroutine-pool workers, delivering notifications across multiple channels with idempotent consumers, dead letter queue handling, and persisted delivery history.
 
 Inspired by patterns from a distributed security auditing platform handling 12,000+ events/sec.
 
@@ -22,8 +22,8 @@ Inspired by patterns from a distributed security auditing platform handling 12,0
                                           ┌─────────────┼─────────────┐
                                           ▼             ▼             ▼
                                         Redis       PostgreSQL   React Dashboard
-                                     (idempotency   (notification  (WebSocket
-                                      + rate limit)   history)      live view)
+                                     (idempotency   (notification  (embedded UI
+                                        cache)        history)       + /ws client)
 ```
 
 ### Why this design
@@ -44,7 +44,7 @@ Inspired by patterns from a distributed security auditing platform handling 12,0
 |---|---|
 | Backend | Go 1.22 |
 | Message broker | RabbitMQ 3.13 |
-| Idempotency / rate limiting | Redis 7 |
+| Idempotency cache | Redis 7 |
 | Persistence | PostgreSQL 16 |
 | Frontend | React + Vite |
 | Real-time | WebSocket (gorilla/websocket) |
@@ -58,11 +58,12 @@ Inspired by patterns from a distributed security auditing platform handling 12,0
 - **Topic-based routing** — flexible event routing via RabbitMQ exchange bindings
 - **Multi-channel delivery** — email, in-app notifications, and outbound webhooks
 - **Idempotent consumers** — Redis-backed deduplication prevents duplicate delivery on worker restart
-- **Dead letter queue + exponential backoff** — failed messages retry 3× with 2s/4s/8s delays before landing in DLQ
+- **Dead letter queue handling** — per-channel priority queues are configured with dedicated DLQs
+- **Webhook retries with exponential backoff** — 2s/4s/8s retry schedule before DLQ
 - **Goroutine pool concurrency control** — configurable per-channel worker pool size
-- **Backpressure handling** — publisher confirms + channel flow control under burst traffic
+- **Backpressure handling** — publisher confirms + per-lane QoS prefetch limits
 - **Notification history** — full delivery audit trail persisted to PostgreSQL
-- **Real-time dashboard** — React frontend streams live delivery status via WebSocket
+- **Embedded dashboard frontend** — React bundle served by the producer via `go:embed`
 
 ---
 
@@ -85,7 +86,9 @@ nexus/
 ├── web/                   # React + Vite frontend
 ├── deploy/
 │   ├── docker-compose.yml
-│   └── railway.toml
+│   ├── railway.toml
+│   └── railway.worker.toml
+├── railway.toml            # Root Railway config (producer)
 └── README.md
 ```
 
@@ -105,7 +108,7 @@ git clone https://github.com/Odiethebest/nexus
 cd nexus
 
 # Start RabbitMQ, Redis, PostgreSQL
-docker compose up -d
+docker compose -f deploy/docker-compose.yml up -d rabbitmq redis postgres
 
 # Start worker
 go run ./cmd/worker
@@ -139,9 +142,16 @@ curl -X POST http://localhost:8080/events \
 
 ### Retry and DLQ strategy
 
-Messages that fail processing are re-queued with a `x-death` header count. After 3 attempts (exponential backoff: 2s → 4s → 8s), the message is forwarded to `{queue}.dlq` with all original headers intact. A separate DLQ consumer logs and persists failed messages for manual inspection or replay.
+Each worker lane queue is configured with `x-dead-letter-routing-key` to a matching `{queue}.dlq`.
 
-This mirrors the retry and DLQ handling built for a high-throughput audit ingestion pipeline at QAX Technology Group.
+- **Webhook worker** retries on delivery failures with exponential backoff (2s → 4s → 8s) based on `x-death` count, then routes to DLQ after max retries.
+- **Email / In-app workers** acknowledge duplicates, requeue transient failures, and dead-letter malformed payloads.
+
+The producer exposes `POST /dlq/replay` for manual replay. There is currently no dedicated background DLQ consumer.
+
+### WebSocket hub scope
+
+The producer and worker are separate binaries and each creates its own in-memory `hub.Hub`. Without an external bridge (for example Redis pub/sub), in-app broadcasts emitted by the worker are process-local and are not automatically visible to producer-hosted `/ws` clients.
 
 ### Goroutine pool implementation
 
@@ -185,15 +195,6 @@ Load tested with [k6](https://k6.io):
 | DLQ rate under normal load | <0.X% |
 
 *(Numbers updated after load testing)*
-
----
-
-## Roadmap
-
-- [ ] Priority queue routing (high/normal/low lanes)
-- [ ] Prometheus metrics + Grafana dashboard
-- [ ] gRPC producer API alongside HTTP
-- [ ] Replay endpoint for DLQ messages
 
 ---
 
