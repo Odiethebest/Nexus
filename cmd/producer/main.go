@@ -24,7 +24,7 @@ import (
 func main() {
 	amqpURL    := getenv("AMQP_URL",      "amqp://guest:guest@localhost:5672/")
 	pgDSN      := getenv("POSTGRES_DSN",  "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
-	listenAddr := getenv("LISTEN_ADDR",   ":8080")
+	listenAddr := getenv("LISTEN_ADDR", ":"+getenv("PORT", "8080"))
 	grpcAddr   := getenv("GRPC_ADDR",     ":50051")
 
 	conn, err := broker.New(amqpURL)
