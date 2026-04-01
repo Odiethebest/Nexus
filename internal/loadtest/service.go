@@ -68,6 +68,9 @@ func (s *Service) Start(
 	if !s.cfg.Enabled {
 		return StartResult{}, ErrDisabled
 	}
+	if s.client == nil {
+		return StartResult{}, fmt.Errorf("loadtest: client is not configured")
+	}
 	if s.cfg.LoadTestID <= 0 {
 		return StartResult{}, fmt.Errorf("loadtest: invalid load test id")
 	}
@@ -108,6 +111,12 @@ func (s *Service) Start(
 
 // SyncRun pulls run state + core metrics and computes insight fields.
 func (s *Service) SyncRun(ctx context.Context, runID int64) (RunInsight, error) {
+	if !s.cfg.Enabled {
+		return RunInsight{}, ErrDisabled
+	}
+	if s.client == nil {
+		return RunInsight{}, fmt.Errorf("loadtest: client is not configured")
+	}
 	run, err := s.client.GetTestRun(ctx, runID)
 	if err != nil {
 		return RunInsight{}, err
