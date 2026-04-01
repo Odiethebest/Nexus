@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -52,7 +53,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	wsHub := hub.New()
+	allowedOrigins := parseAllowedOrigins(os.Getenv("LOADTEST_ALLOWED_ORIGINS"))
+	slog.Info("trusted frontend origins configured", "count", len(allowedOrigins))
+	wsHub := hub.New(func(r *http.Request) bool {
+		return isRequestOriginAllowed(r, allowedOrigins)
+	})
 	pub, err := broker.NewPublisher(conn)
 	if err != nil {
 		slog.Error("failed to create publisher", "err", err)
@@ -94,7 +99,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         listenAddr,
-		Handler:      mux,
+		Handler:      withCORS(mux, allowedOrigins),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -504,6 +509,152 @@ func initLoadtestService() (*loadtest.Service, error) {
 	}
 
 	return loadtest.NewService(serviceCfg, client, guard), nil
+}
+
+func withCORS(next http.Handler, allowedOrigins map[string]struct{}) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !isRequestOriginAllowed(r, allowedOrigins) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+
+		w.Header().Add("Vary", "Origin")
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Key")
+		w.Header().Set("Access-Control-Max-Age", "600")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func parseAllowedOrigins(raw string) map[string]struct{} {
+	allowed := make(map[string]struct{})
+	for _, token := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(token)
+		if origin == "" {
+			continue
+		}
+		key, _, _, _, ok := normalizeOrigin(origin)
+		if !ok {
+			slog.Warn("ignoring invalid allowed origin", "origin", origin)
+			continue
+		}
+		allowed[key] = struct{}{}
+	}
+	return allowed
+}
+
+func isRequestOriginAllowed(r *http.Request, allowedOrigins map[string]struct{}) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+
+	originKey, originScheme, originHost, originPort, ok := normalizeOrigin(origin)
+	if !ok {
+		return false
+	}
+
+	reqScheme := requestScheme(r)
+	reqHost, reqPort, ok := normalizeHostPort(r.Host, reqScheme)
+	if ok &&
+		originScheme == reqScheme &&
+		originHost == reqHost &&
+		originPort == reqPort {
+		return true
+	}
+
+	_, ok = allowedOrigins[originKey]
+	return ok
+}
+
+func normalizeOrigin(raw string) (key, scheme, host, port string, ok bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", "", "", "", false
+	}
+
+	scheme = strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", "", "", "", false
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", "", "", "", false
+	}
+	if path := strings.TrimSpace(parsed.Path); path != "" && path != "/" {
+		return "", "", "", "", false
+	}
+
+	host = strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return "", "", "", "", false
+	}
+	port = parsed.Port()
+	if port == "" {
+		port = defaultPortForScheme(scheme)
+	}
+	if port == "" {
+		return "", "", "", "", false
+	}
+
+	key = fmt.Sprintf("%s://%s:%s", scheme, host, port)
+	return key, scheme, host, port, true
+}
+
+func normalizeHostPort(hostport, scheme string) (host, port string, ok bool) {
+	hostURL, err := url.Parse("http://" + strings.TrimSpace(hostport))
+	if err != nil {
+		return "", "", false
+	}
+	host = strings.ToLower(hostURL.Hostname())
+	if host == "" {
+		return "", "", false
+	}
+	port = hostURL.Port()
+	if port == "" {
+		port = defaultPortForScheme(scheme)
+	}
+	if port == "" {
+		return "", "", false
+	}
+	return host, port, true
+}
+
+func requestScheme(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+		if idx := strings.Index(forwarded, ","); idx >= 0 {
+			forwarded = strings.TrimSpace(forwarded[:idx])
+		}
+		switch strings.ToLower(forwarded) {
+		case "http", "https":
+			return strings.ToLower(forwarded)
+		}
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func defaultPortForScheme(scheme string) string {
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {

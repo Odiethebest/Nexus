@@ -8,11 +8,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	// Allow all origins for development; restrict in production.
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
 type client struct {
 	conn *websocket.Conn
 	send chan []byte
@@ -20,18 +15,29 @@ type client struct {
 
 // Hub manages active WebSocket connections and fans out messages to all clients.
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[*client]struct{}
+	mu       sync.RWMutex
+	clients  map[*client]struct{}
+	upgrader websocket.Upgrader
 }
 
 // New creates an empty Hub.
-func New() *Hub {
-	return &Hub{clients: make(map[*client]struct{})}
+func New(checkOrigins ...func(*http.Request) bool) *Hub {
+	checkOrigin := func(*http.Request) bool { return true }
+	if len(checkOrigins) > 0 && checkOrigins[0] != nil {
+		checkOrigin = checkOrigins[0]
+	}
+
+	return &Hub{
+		clients: make(map[*client]struct{}),
+		upgrader: websocket.Upgrader{
+			CheckOrigin: checkOrigin,
+		},
+	}
 }
 
 // ServeWS upgrades an HTTP connection to WebSocket and registers the client.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("hub: upgrade failed", "err", err)
 		return
