@@ -34,7 +34,7 @@ go run ./cmd/worker
 cd web && npm install && npm run dev
 ```
 
-The frontend dev server proxies `/events`, `/notifications`, `/ws`, and `/dlq/replay` to `localhost:8080` via Vite's proxy config.
+The frontend dev server proxies `/events`, `/notifications`, and `/ws` to `localhost:8080` via Vite's proxy config.
 
 ---
 
@@ -111,7 +111,10 @@ nexus/
 │   ├── Dockerfile.producer
 │   ├── Dockerfile.worker
 │   ├── prometheus.yml
+│   ├── railway.toml
+│   ├── railway.worker.toml
 │   └── grafana/
+├── railway.toml           Railway config at repo root (producer)
 └── doc/                   Engineering documentation
 ```
 

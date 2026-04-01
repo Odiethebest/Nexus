@@ -2,7 +2,7 @@
 
 ## Docker Compose Stack
 
-Full stack (all six services):
+Full stack (all seven services):
 
 ```bash
 docker compose -f deploy/docker-compose.yml up --build
@@ -21,7 +21,7 @@ docker compose -f deploy/docker-compose.yml up -d rabbitmq redis postgres
 | `rabbitmq` | rabbitmq:3.13-management-alpine | 5672, 15672 | Management UI at `/` |
 | `redis` | redis:7-alpine | 6379 | |
 | `postgres` | postgres:16-alpine | 5432 | Volume: `postgres_data` |
-| `producer` | Dockerfile.producer | 8080, 50051 | HTTP + gRPC |
+| `producer` | Dockerfile.producer | 8080 | HTTP (gRPC listens on 50051 inside container) |
 | `worker` | Dockerfile.worker | 9091 | Metrics only |
 | `prometheus` | prom/prometheus:v2.53.0 | 9090 | 7-day retention |
 | `grafana` | grafana/grafana:11.1.0 | 3000 | admin/admin |
@@ -50,7 +50,7 @@ Web UI: `http://localhost:9090`
 | `nexus_messages_published_total` | Counter | `type`, `priority` | Events accepted by the exchange |
 | `nexus_messages_processed_total` | Counter | `channel`, `status` | Worker outcomes per channel |
 | `nexus_publish_duration_seconds` | Histogram | — | End-to-end publish latency incl. broker ack |
-| `nexus_process_duration_seconds` | Histogram | `channel` | Per-message processing time |
+| `nexus_worker_process_duration_seconds` | Histogram | `channel` | Per-message processing time |
 
 `status` label values: `delivered`, `failed`, `duplicate`, `dlq`.
 
@@ -65,7 +65,7 @@ The dashboard is defined in `deploy/grafana/dashboard.json` and auto-loaded via 
 ## Dead-Letter Queue (DLQ)
 
 Messages land in a DLQ when:
-- **Email / In-app**: delivery fails and the message is nacked without requeue.
+- **Email / In-app**: malformed message payload is nacked without requeue.
 - **Webhook**: HTTP delivery fails after 3 retries (backoff: 2 s / 4 s / 8 s). Retry count is tracked via the `x-death` AMQP header.
 
 ### DLQ naming
@@ -94,12 +94,14 @@ The replayer reads up to `max` messages with `basic.get` (non-destructive peek +
 
 ## Deployment (Railway)
 
-Configured in `deploy/railway.toml`.
+Configured in:
+- `railway.toml` (producer service)
+- `deploy/railway.worker.toml` (worker service)
 
 | Service | Dockerfile | Start command | Health check |
 |---------|-----------|---------------|-------------|
-| producer | `Dockerfile.producer` | `/app/producer` | `GET /health` (300 s timeout) |
-| worker | `Dockerfile.worker` | `/app/worker` | — |
+| producer | `deploy/Dockerfile.producer` | `/app/producer` | `GET /health` (300 s timeout) |
+| worker | `deploy/Dockerfile.worker` | `/app/worker` | — |
 
 Set the same environment variables as listed in the [development guide](development.md#environment-variables) as Railway service variables.
 

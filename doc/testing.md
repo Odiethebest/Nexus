@@ -46,7 +46,7 @@ go test -tags=integration ./... -timeout 120s  # unit + integration
 | `internal/store` | 4 integration tests | Save and list; upsert updates status on conflict; results ordered by `created_at DESC`; `limit` is respected |
 | `internal/integration` | 3 integration tests | Full publish → worker → DB pipeline; idempotent delivery (no duplicate rows); fan-out across all three channels (email, inapp, webhook) |
 
-Packages without dedicated tests (`broker`, `worker`, `hub`, `mailer`, `replay`, `grpcserver`) are exercised through the pipeline integration tests.
+Packages without dedicated tests include `broker`, `hub`, `mailer`, `metrics`, `replay`, and `grpcserver`. Pipeline integration tests exercise broker/worker/store paths, but do not directly cover replay or gRPC server handlers.
 
 ---
 
@@ -72,7 +72,7 @@ Each test spins up a fresh `postgres:16-alpine` container with database `nexus_t
 TestStore_SaveAndList                         — round-trip: save one record, list it back
 TestStore_Upsert_UpdatesStatus                — saving same (message_id, channel) updates status field
 TestStore_ListNotifications_OrderedByCreatedAtDesc — newest record appears first
-TestStore_ListNotifications_RespectsLimit     — list(1) returns exactly one row
+TestStore_ListNotifications_RespectsLimit     — list(3) returns exactly three rows
 ```
 
 ---
@@ -92,8 +92,8 @@ TestPipeline_PublishDeliveredToDB
   Asserts: message_id matches, status == "delivered".
 
 TestPipeline_IdempotentDelivery_OneRowOnly
-  Publishes one event, waits for delivery, then publishes a second event with a different ID.
-  Asserts: exactly one row exists for the original message_id (no double-count from duplicate).
+  Publishes one event, waits for delivery, then publishes another event to ensure worker liveness.
+  Asserts: the original message_id appears exactly once in persisted rows.
 
 TestPipeline_MultipleWorkers_AllChannelsDeliver
   Starts email + inapp + webhook workers, publishes one event.

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Nexus is a notification fan-out system. A single published event is routed to three independent delivery channels — email, in-app WebSocket, and webhook — each backed by its own queue and worker pool.
+Nexus is a notification fan-out system. A single published event is routed to three independent worker channels — email, in-app broadcast, and webhook — each backed by its own queue lanes and goroutine pools.
 
 ```
 Client
@@ -24,7 +24,7 @@ Client
     ▼     ▼      ▼
   Worker binary (goroutine pools)
     │     │      │
-    │   WebSocket Hub     ← broadcasts to connected browsers
+    │   WebSocket Hub     ← process-local broadcast hub in worker process
     │     │      │
     └─────┴──────┘
           │
@@ -32,6 +32,8 @@ Client
       PostgreSQL          ← notification history, upsert by (message_id, channel)
       Redis               ← idempotency keys, SET NX EX 86400
 ```
+
+Important runtime note: `cmd/producer` and `cmd/worker` each instantiate their own in-memory `hub.Hub`. Without an external bridge (for example Redis pub/sub), worker in-app broadcasts are not automatically visible on producer-hosted `/ws` connections.
 
 ---
 
@@ -46,7 +48,7 @@ Accepts inbound events and owns the HTTP + gRPC surface:
 | `/events` | POST | Publish event to exchange |
 | `/notifications` | GET | Last 50 delivery records |
 | `/dlq/replay` | POST | Re-queue messages from a DLQ |
-| `/ws` | GET | WebSocket upgrade for in-app feed |
+| `/ws` | GET | WebSocket upgrade endpoint served by producer hub |
 | `/metrics` | GET | Prometheus scrape endpoint |
 | `/health` | GET | Liveness probe |
 
@@ -73,7 +75,7 @@ Three concurrent worker groups share one process. Each group opens three AMQP ch
 | `broker/priority` | Declares the three `Lane` descriptors and their binding patterns. `OpenChannel()` opens an independent AMQP channel from the live connection. |
 | `store` | PostgreSQL wrapper. Auto-migrates `notifications` table on startup. `SaveNotification` is an upsert — concurrent workers for the same message update the same row. |
 | `idempotency` | `SET NX EX 86400` on key `msg:{messageID}`. Returns `true` (first-seen) or `false` (duplicate). Empty IDs always pass. |
-| `hub` | WebSocket fan-out hub. `Broadcast` is non-blocking — slow clients are dropped to protect throughput. |
+| `hub` | Process-local WebSocket fan-out hub. `Broadcast` is non-blocking — slow clients are dropped to protect throughput. |
 | `mailer` | SMTP with STARTTLS (port 587) or implicit TLS (port 465). No-op when `SMTP_HOST` is unset. |
 | `metrics` | Prometheus counters/histograms registered in `init()`. Imported for side effects in both binaries. |
 | `replay` | Drains a DLQ via `basic.get`, recovers the original routing key from the `x-death` header, republishes to `nexus.events`. |
@@ -89,9 +91,9 @@ Three concurrent worker groups share one process. Each group opens three AMQP ch
 3. Exchange routes to three queues based on {priority} in routing key.
 4. Each worker lane pulls from its queue (proportional QoS prefetch).
 5. Worker checks idempotency — duplicate → ack + skip.
-6. Worker delivers (SMTP / WebSocket broadcast / HTTP POST).
+6. Worker delivers (SMTP / in-process hub broadcast / HTTP POST).
 7. Worker upserts delivery record to PostgreSQL.
-8. On fatal failure after max retries, message goes to DLQ.
+8. Failure handling is channel-specific: webhook retries with 2s/4s/8s backoff then DLQs; email/inapp ack duplicates, requeue transient failures, and dead-letter malformed payloads.
 ```
 
 ---
