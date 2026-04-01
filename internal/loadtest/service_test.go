@@ -250,3 +250,132 @@ func TestClient_DecodeWrappedRunResponse(t *testing.T) {
 		t.Fatalf("expected wrapped run id 8888, got %d", run.ID)
 	}
 }
+
+func TestScoreRun_SaturationAndVolatilitySignals(t *testing.T) {
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+
+	stableSeries := CoreSeries{
+		RPS: []MetricPoint{
+			{Timestamp: now, Value: 500},
+			{Timestamp: now.Add(5 * time.Second), Value: 520},
+			{Timestamp: now.Add(10 * time.Second), Value: 530},
+			{Timestamp: now.Add(15 * time.Second), Value: 540},
+		},
+		P95MS: []MetricPoint{
+			{Timestamp: now, Value: 70},
+			{Timestamp: now.Add(5 * time.Second), Value: 72},
+			{Timestamp: now.Add(10 * time.Second), Value: 74},
+			{Timestamp: now.Add(15 * time.Second), Value: 73},
+		},
+		ErrorRatePct: []MetricPoint{
+			{Timestamp: now, Value: 0.2},
+			{Timestamp: now.Add(5 * time.Second), Value: 0.2},
+			{Timestamp: now.Add(10 * time.Second), Value: 0.3},
+			{Timestamp: now.Add(15 * time.Second), Value: 0.2},
+		},
+		VUs: []MetricPoint{
+			{Timestamp: now, Value: 80},
+			{Timestamp: now.Add(5 * time.Second), Value: 82},
+			{Timestamp: now.Add(10 * time.Second), Value: 84},
+			{Timestamp: now.Add(15 * time.Second), Value: 83},
+		},
+	}
+	stableSnapshot := buildSnapshot(stableSeries)
+
+	saturatedSeries := CoreSeries{
+		RPS: []MetricPoint{
+			{Timestamp: now, Value: 500},
+			{Timestamp: now.Add(5 * time.Second), Value: 502},
+			{Timestamp: now.Add(10 * time.Second), Value: 498},
+			{Timestamp: now.Add(15 * time.Second), Value: 497},
+			{Timestamp: now.Add(20 * time.Second), Value: 496},
+			{Timestamp: now.Add(25 * time.Second), Value: 495},
+		},
+		P95MS: []MetricPoint{
+			{Timestamp: now, Value: 80},
+			{Timestamp: now.Add(5 * time.Second), Value: 95},
+			{Timestamp: now.Add(10 * time.Second), Value: 120},
+			{Timestamp: now.Add(15 * time.Second), Value: 170},
+			{Timestamp: now.Add(20 * time.Second), Value: 240},
+			{Timestamp: now.Add(25 * time.Second), Value: 340},
+		},
+		ErrorRatePct: []MetricPoint{
+			{Timestamp: now, Value: 0.3},
+			{Timestamp: now.Add(5 * time.Second), Value: 0.4},
+			{Timestamp: now.Add(10 * time.Second), Value: 0.6},
+			{Timestamp: now.Add(15 * time.Second), Value: 1.1},
+			{Timestamp: now.Add(20 * time.Second), Value: 1.6},
+			{Timestamp: now.Add(25 * time.Second), Value: 2.0},
+		},
+		VUs: []MetricPoint{
+			{Timestamp: now, Value: 80},
+			{Timestamp: now.Add(5 * time.Second), Value: 100},
+			{Timestamp: now.Add(10 * time.Second), Value: 130},
+			{Timestamp: now.Add(15 * time.Second), Value: 170},
+			{Timestamp: now.Add(20 * time.Second), Value: 210},
+			{Timestamp: now.Add(25 * time.Second), Value: 250},
+		},
+	}
+	saturatedSnapshot := buildSnapshot(saturatedSeries)
+
+	run := TestRun{Status: StatusRunning}
+
+	stableScore, stableSignals := scoreRun(run, stableSeries, stableSnapshot)
+	saturatedScore, saturatedSignals := scoreRun(run, saturatedSeries, saturatedSnapshot)
+
+	if stableScore <= saturatedScore {
+		t.Fatalf("expected stable score > saturated score, got stable=%d saturated=%d", stableScore, saturatedScore)
+	}
+	if stableScore < 80 {
+		t.Fatalf("expected stable score >= 80, got %d", stableScore)
+	}
+	if saturatedScore > 70 {
+		t.Fatalf("expected saturated score <= 70, got %d", saturatedScore)
+	}
+
+	if !containsSignal(stableSignals, "latency and error variance are stable") {
+		t.Fatalf("expected stability signal in stable run, got %v", stableSignals)
+	}
+	if !containsSignal(saturatedSignals, "saturation pattern detected") {
+		t.Fatalf("expected saturation signal in saturated run, got %v", saturatedSignals)
+	}
+}
+
+func TestVolatilityPenalty_HighVariance(t *testing.T) {
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	noisy := CoreSeries{
+		P95MS: []MetricPoint{
+			{Timestamp: now, Value: 40},
+			{Timestamp: now.Add(5 * time.Second), Value: 240},
+			{Timestamp: now.Add(10 * time.Second), Value: 60},
+			{Timestamp: now.Add(15 * time.Second), Value: 280},
+			{Timestamp: now.Add(20 * time.Second), Value: 55},
+			{Timestamp: now.Add(25 * time.Second), Value: 260},
+		},
+		ErrorRatePct: []MetricPoint{
+			{Timestamp: now, Value: 0.1},
+			{Timestamp: now.Add(5 * time.Second), Value: 2.9},
+			{Timestamp: now.Add(10 * time.Second), Value: 0.2},
+			{Timestamp: now.Add(15 * time.Second), Value: 3.2},
+			{Timestamp: now.Add(20 * time.Second), Value: 0.1},
+			{Timestamp: now.Add(25 * time.Second), Value: 3.1},
+		},
+	}
+
+	penalty, stability := volatilityPenalty(noisy)
+	if penalty < 10 {
+		t.Fatalf("expected volatility penalty >= 10, got %d", penalty)
+	}
+	if stability >= 0.6 {
+		t.Fatalf("expected low stability (< 0.6), got %.2f", stability)
+	}
+}
+
+func containsSignal(signals []string, needle string) bool {
+	for _, signal := range signals {
+		if strings.Contains(signal, needle) {
+			return true
+		}
+	}
+	return false
+}
