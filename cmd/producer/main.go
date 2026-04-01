@@ -141,6 +141,44 @@ type publishRequest struct {
 	Payload  map[string]any `json:"payload"`
 }
 
+type loadtestStartRequest struct {
+	Scenario string `json:"scenario,omitempty"`
+	Preset   string `json:"preset,omitempty"`
+	Note     string `json:"note,omitempty"`
+}
+
+type loadtestStartResponse struct {
+	RunID            int64              `json:"run_id"`
+	TestID           int64              `json:"test_id"`
+	Status           loadtest.RunStatus `json:"status"`
+	StartedAt        time.Time          `json:"started_at"`
+	PollAfterSeconds int                `json:"poll_after_seconds"`
+}
+
+type loadtestRunEnvelope struct {
+	Run         loadtestRunSummary `json:"run"`
+	Series      loadtestSeriesJSON `json:"series"`
+	Snapshot    any                `json:"snapshot"`
+	HealthScore int                `json:"health_score"`
+	Signals     []string           `json:"signals"`
+	Warnings    []string           `json:"warnings,omitempty"`
+}
+
+type loadtestRunSummary struct {
+	ID      int64              `json:"id"`
+	Status  loadtest.RunStatus `json:"status"`
+	Result  *string            `json:"result"`
+	Created time.Time          `json:"created"`
+	Ended   *time.Time         `json:"ended"`
+}
+
+type loadtestSeriesJSON struct {
+	RPS          [][]any `json:"rps"`
+	P95MS        [][]any `json:"p95_ms"`
+	ErrorRatePct [][]any `json:"error_rate_pct"`
+	VUs          [][]any `json:"vus"`
+}
+
 func handlePublish(pub *broker.Publisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req publishRequest
@@ -216,7 +254,7 @@ func handleLoadtestStart(svc *loadtest.Service, latest *atomic.Int64) http.Handl
 			return
 		}
 
-		var req loadtest.StartOptions
+		var req loadtestStartRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeJSONError(w, http.StatusBadRequest, "invalid request body")
 			return
@@ -226,7 +264,11 @@ func handleLoadtestStart(svc *loadtest.Service, latest *atomic.Int64) http.Handl
 			r.Context(),
 			r.Header.Get("X-Admin-Key"),
 			actorFromRequest(r),
-			req,
+			loadtest.StartOptions{
+				Scenario: req.Scenario,
+				Preset:   req.Preset,
+				Note:     req.Note,
+			},
 		)
 		if err != nil {
 			status, message := mapLoadtestError(err)
@@ -242,12 +284,12 @@ func handleLoadtestStart(svc *loadtest.Service, latest *atomic.Int64) http.Handl
 			pollAfterSeconds = 3
 		}
 
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"run_id":             started.RunID,
-			"test_id":            started.TestID,
-			"status":             started.Status,
-			"started_at":         started.StartedAt,
-			"poll_after_seconds": pollAfterSeconds,
+		writeJSON(w, http.StatusAccepted, loadtestStartResponse{
+			RunID:            started.RunID,
+			TestID:           started.TestID,
+			Status:           started.Status,
+			StartedAt:        started.StartedAt,
+			PollAfterSeconds: pollAfterSeconds,
 		})
 	}
 }
@@ -273,7 +315,7 @@ func handleLoadtestStatus(svc *loadtest.Service) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, insight)
+		writeJSON(w, http.StatusOK, toLoadtestRunEnvelope(insight))
 	}
 }
 
@@ -296,8 +338,51 @@ func handleLoadtestLatest(svc *loadtest.Service, latest *atomic.Int64) http.Hand
 			writeJSONError(w, status, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, insight)
+		writeJSON(w, http.StatusOK, toLoadtestRunEnvelope(insight))
 	}
+}
+
+func toLoadtestRunEnvelope(in loadtest.RunInsight) loadtestRunEnvelope {
+	return loadtestRunEnvelope{
+		Run: loadtestRunSummary{
+			ID:      in.Run.ID,
+			Status:  in.Run.Status,
+			Result:  stringPtrIfNonEmpty(in.Run.Result),
+			Created: in.Run.Created,
+			Ended:   in.Run.Ended,
+		},
+		Series: loadtestSeriesJSON{
+			RPS:          toMetricTuples(in.Series.RPS),
+			P95MS:        toMetricTuples(in.Series.P95MS),
+			ErrorRatePct: toMetricTuples(in.Series.ErrorRatePct),
+			VUs:          toMetricTuples(in.Series.VUs),
+		},
+		Snapshot:    in.Snapshot,
+		HealthScore: in.HealthScore,
+		Signals:     in.Signals,
+		Warnings:    in.Warnings,
+	}
+}
+
+func toMetricTuples(points []loadtest.MetricPoint) [][]any {
+	if len(points) == 0 {
+		return nil
+	}
+	out := make([][]any, 0, len(points))
+	for _, point := range points {
+		out = append(out, []any{
+			point.Timestamp.Unix(),
+			point.Value,
+		})
+	}
+	return out
+}
+
+func stringPtrIfNonEmpty(s string) *string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return &s
 }
 
 func mapLoadtestError(err error) (int, string) {
