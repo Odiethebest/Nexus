@@ -140,34 +140,36 @@ function NotificationsPanel({ notifications, initialising }) {
   const count = notifications.length
 
   return (
-    <div className="panel" style={{ gap: 0 }}>
-      <div className="notif-header" style={{ marginBottom: 16 }}>
+    <div className="panel notif-panel">
+      <div className="notif-header">
         <span className="panel-title">Live Notifications</span>
         <span className="notif-count">
           {count} {count === 1 ? 'event' : 'events'}
         </span>
       </div>
 
-      {initialising ? (
-        <SkeletonFeed />
-      ) : count === 0 ? (
-        <EmptyState />
-      ) : (
-        <div className="notif-list">
-          {notifications.map((n, i) => (
-            <div className="notif-card" key={`${n.message_id}-${i}`}>
-              <div className="notif-card__header">
-                <span className="notif-card__type">{n.type}</span>
-                <div className="notif-card__meta">
-                  <PriorityBadge priority={n.priority} />
-                  <span className="notif-card__time">{relativeTime(n.timestamp)}</span>
+      <div className="notif-body">
+        {initialising ? (
+          <SkeletonFeed />
+        ) : count === 0 ? (
+          <EmptyState />
+        ) : (
+          <div className="notif-list">
+            {notifications.map((n, i) => (
+              <div className="notif-card" key={`${n.message_id}-${i}`}>
+                <div className="notif-card__header">
+                  <span className="notif-card__type">{n.type}</span>
+                  <div className="notif-card__meta">
+                    <PriorityBadge priority={n.priority} />
+                    <span className="notif-card__time">{relativeTime(n.timestamp)}</span>
+                  </div>
                 </div>
+                <span className="notif-card__payload">{fmtPayload(n.payload)}</span>
               </div>
-              <span className="notif-card__payload">{fmtPayload(n.payload)}</span>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

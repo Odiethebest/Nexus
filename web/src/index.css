@@ -10,7 +10,7 @@ button, input, select, textarea { font: inherit; }
   --color-background-primary:   #ffffff;
   --color-background-secondary: #f5f4f1;
   --color-text-primary:         #1a1a18;
-  --color-text-secondary:       #5f5e5a;
+  --color-text-secondary:       #6b6a65;
   --color-text-tertiary:        #b4b2a9;
   --color-border-tertiary:      rgba(0, 0, 0, 0.10);
   --color-border-secondary:     rgba(0, 0, 0, 0.18);
@@ -67,8 +67,7 @@ body {
   grid-template-columns: 1fr 1.6fr;
   gap: 16px;
   padding: 12px 24px 24px;
-  min-height: calc(100vh - 60px);
-  align-items: start;
+  height: calc(100vh - 60px);
 }
 
 @media (max-width: 700px) {
@@ -80,10 +79,10 @@ body {
   background: var(--color-background-primary);
   border: 0.5px solid var(--color-border-tertiary);
   border-radius: var(--border-radius-lg);
-  padding: 20px;
+  padding: 20px 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 .panel-title {
   font-size: 13px;
@@ -102,7 +101,7 @@ body {
 .field-label {
   font-size: 12px;
   font-weight: 500;
-  color: var(--color-text-secondary);
+  color: #3a3a38;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -115,9 +114,10 @@ textarea {
   background: var(--color-background-secondary);
   border: 0.5px solid var(--color-border-secondary);
   border-radius: var(--border-radius-md);
-  padding: 9px 12px;
+  padding: 0 12px;
+  height: 38px;
   font-size: 14px;
-  color: var(--color-text-primary);
+  color: #1a1a18;
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -133,6 +133,8 @@ textarea {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 13px;
   line-height: 1.5;
+  height: auto;
+  padding: 8px 12px;
 }
 select {
   appearance: none;
@@ -179,12 +181,21 @@ select {
   color: #993C1D;
 }
 
-/* ── Notifications panel header ────────────────────────────── */
+/* ── Notifications panel layout ────────────────────────────── */
+.notif-panel { gap: 0; }
+
+.notif-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .notif-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0;
+  margin-bottom: 16px;
 }
 .notif-count {
   background: var(--color-background-secondary);
@@ -197,11 +208,13 @@ select {
 
 /* ── Notification list ─────────────────────────────────────── */
 .notif-list {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 8px;
   overflow-y: auto;
-  max-height: 360px;
+  min-height: 0;
+  align-content: start;
 }
 
 /* ── Notification card ─────────────────────────────────────── */
@@ -249,12 +262,12 @@ select {
 
 /* ── Empty state ───────────────────────────────────────────── */
 .empty-state {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 40px 0;
 }
 .empty-icon {
   width: 36px;
