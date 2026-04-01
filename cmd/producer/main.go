@@ -38,7 +38,11 @@ func main() {
 	}
 
 	wsHub := hub.New()
-	pub := broker.NewPublisher(conn)
+	pub, err := broker.NewPublisher(conn)
+	if err != nil {
+		slog.Error("failed to create publisher", "err", err)
+		os.Exit(1)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /events", handlePublish(pub))

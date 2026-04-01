@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,18 +20,38 @@ type Event struct {
 	Timestamp time.Time      `json:"timestamp"`
 }
 
-// Publisher publishes events to the topic exchange.
+// Publisher publishes events to the topic exchange using a dedicated
+// confirm-mode channel. A mutex serialises publishes so that each ack
+// can be matched to its delivery without a sequence-number tracker.
 type Publisher struct {
-	conn *Connection
+	conn     *Connection
+	mu       sync.Mutex
+	ch       *amqp.Channel
+	confirms <-chan amqp.Confirmation
 }
 
-// NewPublisher creates a Publisher backed by the given connection.
-func NewPublisher(conn *Connection) *Publisher {
-	return &Publisher{conn: conn}
+// NewPublisher opens a confirm-mode channel and returns a ready Publisher.
+func NewPublisher(conn *Connection) (*Publisher, error) {
+	p := &Publisher{conn: conn}
+	if err := p.openChannel(); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (p *Publisher) openChannel() error {
+	ch, err := p.conn.OpenConfirmChannel()
+	if err != nil {
+		return err
+	}
+	p.ch = ch
+	p.confirms = ch.NotifyPublish(make(chan amqp.Confirmation, 1))
+	return nil
 }
 
 // Publish routes an event to the exchange with routing key event.{type}.{priority}.
-// Returns the generated UUIDv7 message ID.
+// It waits for a broker ack before returning. On channel failure it reopens
+// the channel and retries once.
 func (p *Publisher) Publish(ctx context.Context, eventType, priority string, payload map[string]any) (string, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
@@ -50,9 +71,26 @@ func (p *Publisher) Publish(ctx context.Context, eventType, priority string, pay
 		return "", fmt.Errorf("publisher: marshal: %w", err)
 	}
 
-	routingKey := fmt.Sprintf("event.%s.%s", eventType, priority)
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	if err := p.conn.channel.PublishWithContext(
+	if err := p.publishAndConfirm(ctx, event, body); err != nil {
+		// Channel may be dead — reopen and retry once
+		if reopenErr := p.openChannel(); reopenErr != nil {
+			return "", fmt.Errorf("publisher: reopen channel: %w", reopenErr)
+		}
+		if err := p.publishAndConfirm(ctx, event, body); err != nil {
+			return "", err
+		}
+	}
+
+	return event.MessageID, nil
+}
+
+func (p *Publisher) publishAndConfirm(ctx context.Context, event Event, body []byte) error {
+	routingKey := fmt.Sprintf("event.%s.%s", event.Type, event.Priority)
+
+	if err := p.ch.PublishWithContext(
 		ctx,
 		ExchangeName,
 		routingKey,
@@ -66,8 +104,16 @@ func (p *Publisher) Publish(ctx context.Context, eventType, priority string, pay
 			Body:         body,
 		},
 	); err != nil {
-		return "", fmt.Errorf("publisher: publish: %w", err)
+		return fmt.Errorf("publisher: publish: %w", err)
 	}
 
-	return event.MessageID, nil
+	select {
+	case confirm := <-p.confirms:
+		if !confirm.Ack {
+			return fmt.Errorf("publisher: broker nacked message %s", event.MessageID)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

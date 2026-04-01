@@ -1,6 +1,6 @@
-# binaries
-producer
-worker
+# binaries (root-level only)
+/producer
+/worker
 
 # env
 .env
