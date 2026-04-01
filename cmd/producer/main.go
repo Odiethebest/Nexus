@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	_ "nexus/internal/metrics" // register Prometheus collectors
 	"nexus/internal/replay"
 	"nexus/internal/store"
+	nexusweb "nexus/web"
 )
 
 func main() {
@@ -60,6 +62,15 @@ func main() {
 	mux.Handle("GET /metrics",            promhttp.Handler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+	})
+
+	// ── Static frontend ───────────────────────────────────────────────────
+	staticFS, _ := fs.Sub(nexusweb.FS, "dist")
+	mux.Handle("GET /assets/", http.FileServerFS(staticFS))
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		index, _ := nexusweb.FS.ReadFile("dist/index.html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(index)
 	})
 
 	srv := &http.Server{
