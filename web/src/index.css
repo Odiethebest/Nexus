@@ -332,6 +332,124 @@ select {
   box-shadow: 0 0 10px rgba(245, 230, 66, 0.35);
 }
 
+.stress-wave-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stress-wave-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.stress-wave {
+  height: 64px;
+  border: 1px solid rgba(0, 212, 255, 0.28);
+  background:
+    linear-gradient(180deg, rgba(0, 212, 255, 0.07), rgba(0, 212, 255, 0.02)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 212, 255, 0.06) 0,
+      rgba(0, 212, 255, 0.06) 1px,
+      transparent 1px,
+      transparent 16px
+    );
+  overflow: hidden;
+}
+
+.stress-wave svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.stress-wave-midline {
+  stroke: rgba(0, 212, 255, 0.16);
+  stroke-width: 1;
+}
+
+.stress-wave-line {
+  fill: none;
+  stroke: var(--accent-cyan);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.8));
+}
+
+.stress-wave--active .stress-wave-line {
+  animation: wave-neon 1.2s ease-in-out infinite;
+}
+
+@keyframes wave-neon {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.65)); }
+  50% { filter: drop-shadow(0 0 10px rgba(0, 212, 255, 0.95)); }
+}
+
+.stress-beam {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  align-items: center;
+  height: 14px;
+}
+
+.stress-beam__line {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 212, 255, 0.05),
+    rgba(0, 212, 255, 0.9),
+    rgba(0, 212, 255, 0.05)
+  );
+  opacity: 0.15;
+}
+
+.stress-beam--active .stress-beam__line {
+  animation: beam-sweep var(--beam-duration, 1000ms) linear infinite;
+  animation-delay: var(--beam-delay, 0ms);
+}
+
+@keyframes beam-sweep {
+  0% {
+    transform: scaleX(0.18);
+    opacity: 0.14;
+  }
+  55% {
+    transform: scaleX(1);
+    opacity: var(--beam-opacity, 0.7);
+    box-shadow: 0 0 10px rgba(0, 212, 255, 0.6);
+  }
+  100% {
+    transform: scaleX(0.25);
+    opacity: 0.12;
+  }
+}
+
+.stress-warmup,
+.stress-runtime-insight,
+.stress-hint {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  line-height: 1.5;
+}
+
+.stress-warmup {
+  color: var(--accent-cyan);
+}
+
+.stress-runtime-insight,
+.stress-hint {
+  color: var(--text-secondary);
+}
+
 .stress-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -345,6 +463,8 @@ select {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  position: relative;
+  overflow: hidden;
 }
 
 .stress-card__label {
@@ -358,6 +478,92 @@ select {
   font-size: 16px;
   color: var(--text-primary);
   letter-spacing: 0.03em;
+}
+
+.stress-card--p95-hot {
+  border-color: rgba(0, 212, 255, 0.65);
+  animation: p95-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes p95-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 rgba(0, 212, 255, 0); }
+  50% { box-shadow: inset 0 0 18px rgba(0, 212, 255, 0.2), 0 0 10px rgba(0, 212, 255, 0.35); }
+}
+
+.stress-card--error-spike {
+  border-color: rgba(255, 45, 107, 0.7);
+}
+
+.stress-card--error-spike::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    120deg,
+    rgba(255, 45, 107, 0) 18%,
+    rgba(255, 45, 107, 0.34) 50%,
+    rgba(255, 45, 107, 0) 82%
+  );
+  pointer-events: none;
+  animation: error-sweep 1.3s linear infinite;
+}
+
+@keyframes error-sweep {
+  0% { transform: translateX(-125%); }
+  100% { transform: translateX(125%); }
+}
+
+.stress-summary {
+  border: 1px solid rgba(245, 230, 66, 0.32);
+  background: linear-gradient(180deg, rgba(245, 230, 66, 0.08), rgba(245, 230, 66, 0.03));
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: summary-reveal 0.45s ease both;
+}
+
+.stress-summary__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--accent-yellow);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.stress-summary__header strong {
+  font-size: 18px;
+  letter-spacing: 0.04em;
+}
+
+.stress-summary__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stress-summary__list li {
+  border-left: 2px solid rgba(245, 230, 66, 0.38);
+  padding-left: 8px;
+  color: #d4d4ca;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@keyframes summary-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(7px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .stress-start-btn {

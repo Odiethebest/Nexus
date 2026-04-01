@@ -72,6 +72,8 @@ const EVENT_PRESETS = [
 const EVENT_TYPE_OPTIONS = Array.from(new Set(EVENT_PRESETS.map(item => item.type))).sort()
 const LOADTEST_FLOW = ['created', 'queued', 'initializing', 'running', 'processing_metrics', 'completed']
 const LOADTEST_TERMINAL = new Set(['completed', 'aborted'])
+const P95_THRESHOLD_MS = 120
+const ERROR_SPIKE_PCT = 2
 
 // Per-priority card styles (border-left width + bg + optional extra shadow)
 const CARD_STYLE = {
@@ -135,6 +137,106 @@ function scoreClass(score) {
 function statusIndex(status) {
   const mapped = status === 'aborted' ? 'running' : status
   return LOADTEST_FLOW.indexOf(mapped)
+}
+
+function tupleSeriesToValues(series, limit = 32) {
+  if (!Array.isArray(series)) return []
+  const values = series
+    .map(point => {
+      if (!Array.isArray(point)) return NaN
+      return Number(point[1])
+    })
+    .filter(Number.isFinite)
+  if (values.length <= limit) return values
+  return values.slice(values.length - limit)
+}
+
+function sparklinePath(values, width = 320, height = 64, pad = 6) {
+  const nums = values.map(Number).filter(Number.isFinite)
+  if (nums.length === 0) {
+    const y = (height / 2).toFixed(1)
+    return `M ${pad} ${y} L ${width - pad} ${y}`
+  }
+  if (nums.length === 1) {
+    const y = (height / 2).toFixed(1)
+    return `M ${pad} ${y} L ${width - pad} ${y}`
+  }
+
+  const min = Math.min(...nums)
+  const max = Math.max(...nums)
+  const span = max - min || 1
+  return nums
+    .map((value, index) => {
+      const x = nums.length === 1
+        ? width / 2
+        : pad + (index * (width - pad * 2)) / (nums.length - 1)
+      const normalized = (value - min) / span
+      const y = height - pad - normalized * (height - pad * 2)
+      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`
+    })
+    .join(' ')
+}
+
+function pushInsight(bucket, seen, value) {
+  const text = String(value ?? '').trim()
+  if (!text) return
+  const key = text.toLowerCase()
+  if (seen.has(key)) return
+  seen.add(key)
+  bucket.push(text.endsWith('.') ? text : `${text}.`)
+}
+
+function buildFinalInsights({ signals, snapshotInsight, snapshot, warnings, runStatus }) {
+  const lines = []
+  const seen = new Set()
+
+  if (Array.isArray(signals)) {
+    for (const signal of signals) pushInsight(lines, seen, signal)
+  }
+  pushInsight(lines, seen, snapshotInsight)
+  if (Array.isArray(warnings) && warnings[0]) {
+    pushInsight(lines, seen, `signal warning: ${warnings[0]}`)
+  }
+
+  if (snapshot.rps > 0) {
+    pushInsight(lines, seen, `final throughput reached ${fmtMetric(snapshot.rps, 1)} RPS`)
+  } else {
+    pushInsight(lines, seen, 'no steady throughput sample was captured before the run ended')
+  }
+  if (snapshot.p95_ms > 0) {
+    pushInsight(lines, seen, `final p95 latency was ${fmtMetric(snapshot.p95_ms, 1, ' ms')}`)
+  }
+  if (snapshot.error_rate_pct >= 0) {
+    pushInsight(lines, seen, `final error rate was ${fmtMetric(snapshot.error_rate_pct, 2, '%')}`)
+  }
+  if (snapshot.vus > 0) {
+    pushInsight(lines, seen, `active virtual users reached ${fmtMetric(snapshot.vus, 0)}`)
+  }
+  if (runStatus === 'aborted') {
+    pushInsight(lines, seen, 'run ended in aborted state')
+  }
+
+  while (lines.length < 3) {
+    pushInsight(lines, seen, 'metrics are limited, rerun once traffic is ready for a fuller signal')
+  }
+  return lines.slice(0, 3)
+}
+
+function retryHint(error) {
+  const msg = String(error ?? '').toLowerCase()
+  if (msg.includes('upstream')) {
+    return 'Upstream load test provider failed. Wait 20 to 30 seconds, then press Start Load Test again.'
+  }
+  if (msg.includes('already running')) {
+    return 'Another run is active now. Wait for it to finish, then retry.'
+  }
+  if (msg.includes('cooldown')) {
+    return 'Cooldown is active. Retry after the cooldown window expires.'
+  }
+  if (msg.includes('unauthorized')) {
+    return 'Admin Key is invalid. Update the key and retry.'
+  }
+  return 'Retry once. If it still fails, check producer logs and LOADTEST environment variables.'
 }
 
 // ── PriorityBadge ─────────────────────────────────────────────
@@ -315,6 +417,10 @@ function StressLabPanel() {
   const [runId, setRunId] = useState(null)
   const [runStatus, setRunStatus] = useState('idle')
   const [healthScore, setHealthScore] = useState(0)
+  const [rpsSeries, setRpsSeries] = useState([])
+  const [signals, setSignals] = useState([])
+  const [warnings, setWarnings] = useState([])
+  const [snapshotInsight, setSnapshotInsight] = useState('')
   const [snapshot, setSnapshot] = useState({
     rps: 0,
     p95_ms: 0,
@@ -323,7 +429,9 @@ function StressLabPanel() {
   })
   const [startLoading, setStartLoading] = useState(false)
   const [pollAfterMs, setPollAfterMs] = useState(3000)
+  const [throughputShift, setThroughputShift] = useState(0)
   const [error, setError] = useState(null)
+  const lastRpsRef = useRef(0)
 
   useEffect(() => {
     localStorage.setItem('nexus_loadtest_admin_key', adminKey)
@@ -337,14 +445,26 @@ function StressLabPanel() {
       const data = await res.json()
 
       const nextStatus = data?.run?.status || 'running'
-      setRunStatus(nextStatus)
-      setHealthScore(Number(data?.health_score ?? 0))
-      setSnapshot({
+      const nextSnapshot = {
         rps: Number(data?.snapshot?.rps ?? 0),
         p95_ms: Number(data?.snapshot?.p95_ms ?? 0),
         error_rate_pct: Number(data?.snapshot?.error_rate_pct ?? 0),
         vus: Number(data?.snapshot?.vus ?? 0),
-      })
+      }
+      const nextSeries = tupleSeriesToValues(data?.series?.rps)
+
+      setRunStatus(nextStatus)
+      setHealthScore(Number(data?.health_score ?? 0))
+      setSnapshot(nextSnapshot)
+      setRpsSeries(nextSeries)
+      setSignals(Array.isArray(data?.signals) ? data.signals.filter(Boolean) : [])
+      setWarnings(Array.isArray(data?.warnings) ? data.warnings.filter(Boolean) : [])
+      setSnapshotInsight(typeof data?.snapshot?.insight === 'string' ? data.snapshot.insight : '')
+
+      const delta = Math.abs(nextSnapshot.rps - lastRpsRef.current)
+      setThroughputShift(delta)
+      lastRpsRef.current = nextSnapshot.rps
+
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -373,6 +493,13 @@ function StressLabPanel() {
       const nextRunId = Number(data?.run_id)
       setRunId(nextRunId)
       setRunStatus(data?.status || 'created')
+      setRpsSeries([])
+      setSignals([])
+      setWarnings([])
+      setSnapshotInsight('')
+      setSnapshot({ rps: 0, p95_ms: 0, error_rate_pct: 0, vus: 0 })
+      setThroughputShift(0)
+      lastRpsRef.current = 0
       setPollAfterMs(Math.max(1, Number(data?.poll_after_seconds || 3)) * 1000)
       await syncRun(nextRunId)
     } catch (err) {
@@ -394,6 +521,25 @@ function StressLabPanel() {
   const statusStep = statusIndex(runStatus)
   const score = Number.isFinite(healthScore) ? Math.max(0, Math.min(100, Math.round(healthScore))) : 0
   const running = !!runId && !LOADTEST_TERMINAL.has(runStatus)
+  const hasMetrics = (
+    rpsSeries.length > 0 ||
+    snapshot.rps > 0 ||
+    snapshot.p95_ms > 0 ||
+    snapshot.error_rate_pct > 0 ||
+    snapshot.vus > 0
+  )
+  const warmingUp = running && !hasMetrics
+  const waveformValues = rpsSeries.length > 0 ? rpsSeries : (snapshot.rps > 0 ? [snapshot.rps] : [])
+  const waveformPath = sparklinePath(waveformValues.length > 0 ? waveformValues : [0, 0])
+  const beamStrength = Math.max(0, Math.min(1, snapshot.rps / 200 + throughputShift / 80))
+  const beamDurationMs = Math.max(460, 1300 - Math.round(beamStrength * 700))
+  const beamOpacity = running && snapshot.rps > 0 ? Math.max(0.24, beamStrength) : 0.16
+  const p95Hot = snapshot.p95_ms >= P95_THRESHOLD_MS
+  const errorSpike = snapshot.error_rate_pct >= ERROR_SPIKE_PCT
+  const finalInsights = LOADTEST_TERMINAL.has(runStatus)
+    ? buildFinalInsights({ signals, snapshotInsight, snapshot, warnings, runStatus })
+    : []
+  const primaryWarning = warnings[0] ? `Signal warning: ${warnings[0]}` : null
 
   let startBtnLabel = '[ START LOAD TEST ]'
   if (startLoading) startBtnLabel = '[ STARTING... ]'
@@ -436,16 +582,51 @@ function StressLabPanel() {
         ))}
       </div>
 
+      <div className="stress-wave-wrap">
+        <div className="stress-wave-meta">
+          <span>RPS WAVEFORM</span>
+          <span>{hasMetrics ? `${fmtMetric(snapshot.rps, 1)} LIVE` : 'WARMING UP'}</span>
+        </div>
+        <div className={`stress-wave${waveformValues.length > 1 ? ' stress-wave--active' : ''}`}>
+          <svg viewBox="0 0 320 64" preserveAspectRatio="none" role="img" aria-label="RPS waveform">
+            <path className="stress-wave-midline" d="M 0 32 L 320 32" />
+            <path className="stress-wave-line" d={waveformPath} />
+          </svg>
+        </div>
+      </div>
+
+      <div
+        className={`stress-beam${running && snapshot.rps > 0 ? ' stress-beam--active' : ''}`}
+        style={{
+          '--beam-duration': `${beamDurationMs}ms`,
+          '--beam-opacity': beamOpacity,
+        }}
+      >
+        {[0, 1, 2, 3, 4].map(i => (
+          <span
+            key={i}
+            className="stress-beam__line"
+            style={{ '--beam-delay': `${i * 70}ms` }}
+          />
+        ))}
+      </div>
+
+      {warmingUp ? (
+        <p className="stress-warmup">Warming up: waiting for first metrics sample.</p>
+      ) : (
+        <p className="stress-runtime-insight">{snapshotInsight || 'Collecting runtime signal.'}</p>
+      )}
+
       <div className="stress-cards">
         <div className="stress-card">
           <span className="stress-card__label">RPS</span>
           <span className="stress-card__value">{fmtMetric(snapshot.rps, 1)}</span>
         </div>
-        <div className="stress-card">
+        <div className={`stress-card${p95Hot ? ' stress-card--p95-hot' : ''}`}>
           <span className="stress-card__label">P95 (MS)</span>
           <span className="stress-card__value">{fmtMetric(snapshot.p95_ms, 1)}</span>
         </div>
-        <div className="stress-card">
+        <div className={`stress-card${errorSpike ? ' stress-card--error-spike' : ''}`}>
           <span className="stress-card__label">ERROR %</span>
           <span className="stress-card__value">{fmtMetric(snapshot.error_rate_pct, 2, '%')}</span>
         </div>
@@ -455,7 +636,23 @@ function StressLabPanel() {
         </div>
       </div>
 
+      {LOADTEST_TERMINAL.has(runStatus) && (
+        <div key={`${runId}-${runStatus}-${score}`} className="stress-summary">
+          <div className="stress-summary__header">
+            <span>FINAL SCORE</span>
+            <strong>{score}</strong>
+          </div>
+          <ul className="stress-summary__list">
+            {finalInsights.map((line, i) => (
+              <li key={`${runId}-${i}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {error && <p className="form-error">// ERR: {error}</p>}
+      {error && <p className="stress-hint">{retryHint(error)}</p>}
+      {!error && primaryWarning && <p className="stress-hint">{primaryWarning}</p>}
 
       <button
         type="button"
