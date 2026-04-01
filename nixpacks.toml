@@ -2,10 +2,10 @@
 nixPkgs = ["nodejs_20"]
 
 [phases.install]
-cmds = ["go mod download", "cd web && npm install"]
+cmds = ["go mod download && npm --prefix web install"]
 
 [phases.build]
-cmds = ["cd web && npm run build", "go build -ldflags='-w -s' -o out ./cmd/producer"]
+cmds = ["npm --prefix web run build && go build -ldflags='-w -s' -o out ./cmd/producer"]
 
 [start]
 cmd = "./out"
