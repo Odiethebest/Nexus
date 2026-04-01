@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package event.v1;
+
+option go_package = "nexus/internal/grpcserver;grpcserver";
+
+// EventService exposes a gRPC interface alongside the HTTP API.
+// Regenerate Go stubs: buf generate  (requires buf.build toolchain)
+service EventService {
+  // Publish routes an event to the exchange and returns its message ID.
+  rpc Publish(PublishRequest) returns (PublishResponse);
+}
+
+message PublishRequest {
+  string type     = 1;
+  string priority = 2;
+  bytes  payload  = 3; // JSON-encoded map[string]any
+}
+
+message PublishResponse {
+  string message_id = 1;
+}
