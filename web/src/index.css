@@ -108,6 +108,13 @@ body {
   .dash { grid-template-columns: 1fr; height: auto; }
 }
 
+.left-stack {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
 /* ── Panel (L2 titles: 15px) ───────────────────────────────── */
 .panel {
   background: var(--bg-panel);
@@ -125,6 +132,7 @@ body {
 /* Left panel: fields at top, button pinned to bottom */
 .publish-panel { justify-content: space-between; }
 .publish-fields { display: flex; flex-direction: column; gap: 18px; }
+.left-stack .panel { height: auto; }
 
 .panel-title {
   font-size: 15px;
@@ -165,6 +173,7 @@ body {
 }
 
 input[type="text"],
+input[type="password"],
 select,
 textarea {
   width: 100%;
@@ -182,6 +191,7 @@ textarea {
 }
 
 input[type="text"]:focus,
+input[type="password"]:focus,
 select:focus,
 textarea:focus {
   border-color: var(--accent-cyan);
@@ -241,6 +251,117 @@ select {
   color: var(--accent-yellow);
   background: rgba(245, 230, 66, 0.08);
   box-shadow: 0 0 10px rgba(245, 230, 66, 0.35);
+}
+
+/* ── Stress lab panel ──────────────────────────────────────── */
+.stress-panel {
+  gap: 12px;
+}
+
+.stress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stress-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 50px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--accent-yellow);
+  letter-spacing: 0.1em;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.stress-score--high {
+  color: var(--accent-yellow);
+  border-color: var(--accent-yellow);
+  box-shadow: 0 0 8px rgba(245, 230, 66, 0.45);
+}
+
+.stress-score--medium {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.35);
+}
+
+.stress-score--low {
+  color: var(--accent-pink);
+  border-color: var(--accent-pink);
+  box-shadow: 0 0 8px rgba(255, 45, 107, 0.4);
+}
+
+.stress-run-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.stress-flow-label {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+.stress-flow {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.stress-step {
+  height: 8px;
+  border: 1px solid rgba(138, 138, 128, 0.45);
+  background: rgba(138, 138, 128, 0.08);
+}
+
+.stress-step--active {
+  border-color: var(--accent-yellow);
+  background: rgba(245, 230, 66, 0.2);
+  box-shadow: 0 0 10px rgba(245, 230, 66, 0.35);
+}
+
+.stress-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stress-card {
+  border: 1px solid rgba(245, 230, 66, 0.18);
+  background: rgba(245, 230, 66, 0.03);
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.stress-card__label {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.stress-card__value {
+  font-size: 16px;
+  color: var(--text-primary);
+  letter-spacing: 0.03em;
+}
+
+.stress-start-btn {
+  margin-top: 4px;
 }
 
 /* ── Priority badge ────────────────────────────────────────── */

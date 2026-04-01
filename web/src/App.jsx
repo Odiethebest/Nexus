@@ -70,6 +70,8 @@ const EVENT_PRESETS = [
   },
 ]
 const EVENT_TYPE_OPTIONS = Array.from(new Set(EVENT_PRESETS.map(item => item.type))).sort()
+const LOADTEST_FLOW = ['created', 'queued', 'initializing', 'running', 'processing_metrics', 'completed']
+const LOADTEST_TERMINAL = new Set(['completed', 'aborted'])
 
 // Per-priority card styles (border-left width + bg + optional extra shadow)
 const CARD_STYLE = {
@@ -104,6 +106,35 @@ function fmtPayload(payload) {
 
 function payloadToText(payload) {
   return JSON.stringify(payload, null, 2)
+}
+
+async function readErrorMessage(res) {
+  const fallback = `REQUEST FAILED (${res.status})`
+  const raw = await res.text()
+  if (!raw) return fallback
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed?.error || raw
+  } catch {
+    return raw
+  }
+}
+
+function fmtMetric(value, digits = 1, suffix = '') {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '--'
+  return `${n.toFixed(digits)}${suffix}`
+}
+
+function scoreClass(score) {
+  if (score >= 80) return 'stress-score--high'
+  if (score >= 50) return 'stress-score--medium'
+  return 'stress-score--low'
+}
+
+function statusIndex(status) {
+  const mapped = status === 'aborted' ? 'running' : status
+  return LOADTEST_FLOW.indexOf(mapped)
 }
 
 // ── PriorityBadge ─────────────────────────────────────────────
@@ -278,6 +309,166 @@ function PublishPanel({ onPublished }) {
   )
 }
 
+// ── StressLabPanel ───────────────────────────────────────────
+function StressLabPanel() {
+  const [adminKey, setAdminKey] = useState(() => localStorage.getItem('nexus_loadtest_admin_key') ?? '')
+  const [runId, setRunId] = useState(null)
+  const [runStatus, setRunStatus] = useState('idle')
+  const [healthScore, setHealthScore] = useState(0)
+  const [snapshot, setSnapshot] = useState({
+    rps: 0,
+    p95_ms: 0,
+    error_rate_pct: 0,
+    vus: 0,
+  })
+  const [startLoading, setStartLoading] = useState(false)
+  const [pollAfterMs, setPollAfterMs] = useState(3000)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    localStorage.setItem('nexus_loadtest_admin_key', adminKey)
+  }, [adminKey])
+
+  async function syncRun(targetRunId) {
+    if (!targetRunId) return
+    try {
+      const res = await fetch(`/ops/loadtest/${targetRunId}`)
+      if (!res.ok) throw new Error(await readErrorMessage(res))
+      const data = await res.json()
+
+      const nextStatus = data?.run?.status || 'running'
+      setRunStatus(nextStatus)
+      setHealthScore(Number(data?.health_score ?? 0))
+      setSnapshot({
+        rps: Number(data?.snapshot?.rps ?? 0),
+        p95_ms: Number(data?.snapshot?.p95_ms ?? 0),
+        error_rate_pct: Number(data?.snapshot?.error_rate_pct ?? 0),
+        vus: Number(data?.snapshot?.vus ?? 0),
+      })
+      setError(null)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function handleStartLoadtest() {
+    setError(null)
+    setStartLoading(true)
+    try {
+      const res = await fetch('/ops/loadtest/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
+        },
+        body: JSON.stringify({
+          scenario: 'default',
+          preset: 'quick',
+          note: 'dashboard one-click run',
+        }),
+      })
+      if (!res.ok) throw new Error(await readErrorMessage(res))
+      const data = await res.json()
+
+      const nextRunId = Number(data?.run_id)
+      setRunId(nextRunId)
+      setRunStatus(data?.status || 'created')
+      setPollAfterMs(Math.max(1, Number(data?.poll_after_seconds || 3)) * 1000)
+      await syncRun(nextRunId)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setStartLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!runId) return
+    if (LOADTEST_TERMINAL.has(runStatus)) return
+    const t = setTimeout(() => {
+      syncRun(runId)
+    }, pollAfterMs)
+    return () => clearTimeout(t)
+  }, [runId, runStatus, pollAfterMs])
+
+  const statusStep = statusIndex(runStatus)
+  const score = Number.isFinite(healthScore) ? Math.max(0, Math.min(100, Math.round(healthScore))) : 0
+  const running = !!runId && !LOADTEST_TERMINAL.has(runStatus)
+
+  let startBtnLabel = '[ START LOAD TEST ]'
+  if (startLoading) startBtnLabel = '[ STARTING... ]'
+  else if (running) startBtnLabel = '[ LOAD TEST RUNNING ]'
+  else if (runStatus === 'completed') startBtnLabel = '[ RUN COMPLETED ]'
+  else if (runStatus === 'aborted') startBtnLabel = '[ RUN ABORTED ]'
+
+  return (
+    <div className="panel stress-panel">
+      <div className="stress-header">
+        <span className="panel-title">
+          <span className="slash">╱</span> Stress Lab
+        </span>
+        <span className={`stress-score ${scoreClass(score)}`}>{score}</span>
+      </div>
+
+      <div className="field-group">
+        <label className="field-label">Admin Key</label>
+        <input
+          type="password"
+          value={adminKey}
+          onChange={e => setAdminKey(e.target.value)}
+          placeholder="X-Admin-Key"
+          autoComplete="off"
+        />
+      </div>
+
+      <div className="stress-run-meta">
+        <span>RUN: {runId ?? '--'}</span>
+        <span>STATUS: {runStatus}</span>
+      </div>
+      <p className="stress-flow-label">created → queued → initializing → running → processing_metrics → completed</p>
+      <div className="stress-flow">
+        {LOADTEST_FLOW.map((step, i) => (
+          <span
+            key={step}
+            className={`stress-step${i <= statusStep ? ' stress-step--active' : ''}`}
+            title={step}
+          />
+        ))}
+      </div>
+
+      <div className="stress-cards">
+        <div className="stress-card">
+          <span className="stress-card__label">RPS</span>
+          <span className="stress-card__value">{fmtMetric(snapshot.rps, 1)}</span>
+        </div>
+        <div className="stress-card">
+          <span className="stress-card__label">P95 (MS)</span>
+          <span className="stress-card__value">{fmtMetric(snapshot.p95_ms, 1)}</span>
+        </div>
+        <div className="stress-card">
+          <span className="stress-card__label">ERROR %</span>
+          <span className="stress-card__value">{fmtMetric(snapshot.error_rate_pct, 2, '%')}</span>
+        </div>
+        <div className="stress-card">
+          <span className="stress-card__label">VUS</span>
+          <span className="stress-card__value">{fmtMetric(snapshot.vus, 0)}</span>
+        </div>
+      </div>
+
+      {error && <p className="form-error">// ERR: {error}</p>}
+
+      <button
+        type="button"
+        className="publish-btn stress-start-btn"
+        onClick={handleStartLoadtest}
+        disabled={startLoading || running}
+      >
+        {startBtnLabel}
+      </button>
+    </div>
+  )
+}
+
 // ── EmptyState ────────────────────────────────────────────────
 function EmptyState() {
   return (
@@ -428,7 +619,10 @@ export default function App() {
       </header>
 
       <main className="dash">
-        <PublishPanel onPublished={handlePublished} />
+        <div className="left-stack">
+          <PublishPanel onPublished={handlePublished} />
+          <StressLabPanel />
+        </div>
         <NotificationsPanel notifications={notifications} initialising={initialising} />
       </main>
     </>
