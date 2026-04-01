@@ -158,6 +158,12 @@ body {
   justify-content: space-between;
 }
 
+.field-help {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
 input[type="text"],
 select,
 textarea {
@@ -197,6 +203,44 @@ select {
   background-position: right 14px center;
   padding-right: 36px;
   cursor: pointer;
+}
+
+.preset-hint {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preset-chip {
+  border: 1px solid rgba(0, 212, 255, 0.45);
+  background: rgba(0, 212, 255, 0.06);
+  color: var(--accent-cyan);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, color 0.15s;
+}
+
+.preset-chip:hover {
+  border-color: var(--accent-yellow);
+  color: var(--accent-yellow);
+  box-shadow: 0 0 10px rgba(245, 230, 66, 0.35);
+}
+
+.preset-chip--active {
+  border-color: var(--accent-yellow);
+  color: var(--accent-yellow);
+  background: rgba(245, 230, 66, 0.08);
+  box-shadow: 0 0 10px rgba(245, 230, 66, 0.35);
 }
 
 /* ── Priority badge ────────────────────────────────────────── */

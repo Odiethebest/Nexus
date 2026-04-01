@@ -3,6 +3,73 @@ import { useState, useEffect, useRef } from 'react'
 // ── Helpers ───────────────────────────────────────────────────
 const PRIORITY_COLOR = { high: '#ff2d6b', normal: '#f5e642', low: '#00d4ff' }
 const BADGE_CLASS    = { high: 'badge-high', normal: 'badge-normal', low: 'badge-low' }
+const CUSTOM_PRESET_ID = 'custom'
+const EVENT_PRESETS = [
+  {
+    id: 'order_created',
+    label: 'Order Created',
+    type: 'order.created',
+    priority: 'high',
+    payload: {
+      order_id: 'ord_1001',
+      user_id: 'u123',
+      amount: 99.5,
+      currency: 'USD',
+    },
+    hint: 'Common purchase event with order amount and currency.',
+  },
+  {
+    id: 'payment_failed',
+    label: 'Payment Failed',
+    type: 'payment.failed',
+    priority: 'high',
+    payload: {
+      payment_id: 'pay_293',
+      user_id: 'u123',
+      reason: 'card_declined',
+      retryable: true,
+    },
+    hint: 'High priority payment failure with a retry signal.',
+  },
+  {
+    id: 'security_alert',
+    label: 'Security Alert',
+    type: 'security.alert',
+    priority: 'high',
+    payload: {
+      user_id: 'u123',
+      location: 'Los Angeles, US',
+      ip: '203.0.113.8',
+      action: 'new_device_login',
+    },
+    hint: 'Security warning template for suspicious activity.',
+  },
+  {
+    id: 'welcome_user',
+    label: 'Welcome User',
+    type: 'user.welcome',
+    priority: 'normal',
+    payload: {
+      user_id: 'u123',
+      email: 'user@example.com',
+      plan: 'starter',
+    },
+    hint: 'Normal priority onboarding message for new users.',
+  },
+  {
+    id: 'digest_ready',
+    label: 'Digest Ready',
+    type: 'digest.ready',
+    priority: 'low',
+    payload: {
+      user_id: 'u123',
+      range: 'daily',
+      unread: 4,
+    },
+    hint: 'Low priority informational digest notification.',
+  },
+]
+const EVENT_TYPE_OPTIONS = Array.from(new Set(EVENT_PRESETS.map(item => item.type))).sort()
 
 // Per-priority card styles (border-left width + bg + optional extra shadow)
 const CARD_STYLE = {
@@ -35,6 +102,10 @@ function fmtPayload(payload) {
   try { return JSON.stringify(payload) } catch { return String(payload) }
 }
 
+function payloadToText(payload) {
+  return JSON.stringify(payload, null, 2)
+}
+
 // ── PriorityBadge ─────────────────────────────────────────────
 function PriorityBadge({ priority }) {
   return (
@@ -46,12 +117,32 @@ function PriorityBadge({ priority }) {
 
 // ── PublishPanel ──────────────────────────────────────────────
 function PublishPanel({ onPublished }) {
-  const [type, setType]              = useState('order')
-  const [priority, setPriority]      = useState('high')
-  const [payload, setPayload]        = useState('{"user_id":"u123","email":"user@example.com"}')
+  const defaultPreset = EVENT_PRESETS[0]
+  const [presetId, setPresetId]      = useState(defaultPreset.id)
+  const [type, setType]              = useState(defaultPreset.type)
+  const [priority, setPriority]      = useState(defaultPreset.priority)
+  const [payload, setPayload]        = useState(payloadToText(defaultPreset.payload))
   const [loading, setLoading]        = useState(false)
   const [transmitted, setTransmitted] = useState(false)
   const [error, setError]            = useState(null)
+  const currentPreset = EVENT_PRESETS.find(item => item.id === presetId)
+
+  function markCustomPreset() {
+    if (presetId !== CUSTOM_PRESET_ID) setPresetId(CUSTOM_PRESET_ID)
+  }
+
+  function applyPreset(nextPresetId) {
+    const preset = EVENT_PRESETS.find(item => item.id === nextPresetId)
+    if (!preset) {
+      setPresetId(CUSTOM_PRESET_ID)
+      return
+    }
+    setPresetId(preset.id)
+    setType(preset.type)
+    setPriority(preset.priority)
+    setPayload(payloadToText(preset.payload))
+    setError(null)
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -95,14 +186,51 @@ function PublishPanel({ onPublished }) {
           </span>
 
           <div className="field-group">
+            <label className="field-label">Preset</label>
+            <select value={presetId} onChange={e => applyPreset(e.target.value)}>
+              <option value={CUSTOM_PRESET_ID}>Custom</option>
+              {EVENT_PRESETS.map(preset => (
+                <option key={preset.id} value={preset.id}>{preset.label}</option>
+              ))}
+            </select>
+            <p className="preset-hint">
+              {currentPreset
+                ? currentPreset.hint
+                : 'Pick a preset to auto-fill the form, then tweak what you need.'}
+            </p>
+            <div className="preset-list">
+              {EVENT_PRESETS.map(preset => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`preset-chip${preset.id === presetId ? ' preset-chip--active' : ''}`}
+                  onClick={() => applyPreset(preset.id)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="field-group">
             <label className="field-label">Type</label>
             <input
               type="text"
+              list="event-type-options"
               value={type}
-              onChange={e => setType(e.target.value)}
+              onChange={e => {
+                setType(e.target.value)
+                markCustomPreset()
+              }}
               placeholder="order / payment / alert"
               required
             />
+            <datalist id="event-type-options">
+              {EVENT_TYPE_OPTIONS.map(option => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
+            <p className="field-help">Use one of the common types or enter your own.</p>
           </div>
 
           <div className="field-group">
@@ -110,7 +238,13 @@ function PublishPanel({ onPublished }) {
               Priority
               <PriorityBadge priority={priority} />
             </label>
-            <select value={priority} onChange={e => setPriority(e.target.value)}>
+            <select
+              value={priority}
+              onChange={e => {
+                setPriority(e.target.value)
+                markCustomPreset()
+              }}
+            >
               <option value="high">High</option>
               <option value="normal">Normal</option>
               <option value="low">Low</option>
@@ -121,7 +255,10 @@ function PublishPanel({ onPublished }) {
             <label className="field-label">Payload (JSON)</label>
             <textarea
               value={payload}
-              onChange={e => setPayload(e.target.value)}
+              onChange={e => {
+                setPayload(e.target.value)
+                markCustomPreset()
+              }}
               rows={4}
             />
           </div>
