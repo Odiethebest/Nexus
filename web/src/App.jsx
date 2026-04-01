@@ -241,7 +241,15 @@ export default function App() {
 
   useEffect(() => {
     function connect() {
-      const ws = new WebSocket(`ws://${location.host}/ws`)
+      const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
+      let ws
+      try {
+        ws = new WebSocket(`${protocol}://${location.host}/ws`)
+      } catch {
+        setWsStatus('disconnected')
+        setTimeout(connect, 3000)
+        return
+      }
       wsRef.current = ws
       ws.onopen    = () => setWsStatus('connected')
       ws.onclose   = () => { setWsStatus('disconnected'); setTimeout(connect, 3000) }
