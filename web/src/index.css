@@ -307,6 +307,36 @@ select {
   text-transform: uppercase;
 }
 
+.stress-phase {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.stress-phase--idle {
+  color: var(--text-secondary);
+}
+
+.stress-phase--starting,
+.stress-phase--running {
+  color: var(--accent-cyan);
+}
+
+.stress-phase--analyzing {
+  color: var(--accent-yellow);
+}
+
+.stress-phase--completed {
+  color: var(--accent-yellow);
+  text-shadow: 0 0 8px rgba(245, 230, 66, 0.35);
+}
+
+.stress-phase--failed {
+  color: var(--accent-pink);
+  text-shadow: 0 0 8px rgba(255, 45, 107, 0.35);
+}
+
 .stress-flow-label {
   font-size: 10px;
   letter-spacing: 0.04em;

@@ -71,7 +71,16 @@ const EVENT_PRESETS = [
 ]
 const EVENT_TYPE_OPTIONS = Array.from(new Set(EVENT_PRESETS.map(item => item.type))).sort()
 const LOADTEST_FLOW = ['created', 'queued', 'initializing', 'running', 'processing_metrics', 'completed']
-const LOADTEST_TERMINAL = new Set(['completed', 'aborted'])
+const LOADTEST_PHASE = Object.freeze({
+  IDLE: 'idle',
+  STARTING: 'starting',
+  RUNNING: 'running',
+  ANALYZING: 'analyzing',
+  COMPLETED: 'completed',
+  FAILED: 'failed',
+})
+const DEFAULT_POLL_MS = 3000
+const BACKOFF_POLL_MS = [5000, 6500, 8000]
 const P95_THRESHOLD_MS = 120
 const ERROR_SPIKE_PCT = 2
 
@@ -132,6 +141,23 @@ function scoreClass(score) {
   if (score >= 80) return 'stress-score--high'
   if (score >= 50) return 'stress-score--medium'
   return 'stress-score--low'
+}
+
+function phaseClass(phase) {
+  switch (phase) {
+    case LOADTEST_PHASE.STARTING:
+      return 'stress-phase--starting'
+    case LOADTEST_PHASE.RUNNING:
+      return 'stress-phase--running'
+    case LOADTEST_PHASE.ANALYZING:
+      return 'stress-phase--analyzing'
+    case LOADTEST_PHASE.COMPLETED:
+      return 'stress-phase--completed'
+    case LOADTEST_PHASE.FAILED:
+      return 'stress-phase--failed'
+    default:
+      return 'stress-phase--idle'
+  }
 }
 
 function statusIndex(status) {
@@ -237,6 +263,40 @@ function retryHint(error) {
     return 'Admin Key is invalid. Update the key and retry.'
   }
   return 'Retry once. If it still fails, check producer logs and LOADTEST environment variables.'
+}
+
+function phaseFromRunStatus(status) {
+  switch (status) {
+    case 'created':
+    case 'queued':
+    case 'initializing':
+    case 'running':
+      return LOADTEST_PHASE.RUNNING
+    case 'processing_metrics':
+      return LOADTEST_PHASE.ANALYZING
+    case 'completed':
+      return LOADTEST_PHASE.COMPLETED
+    case 'aborted':
+      return LOADTEST_PHASE.FAILED
+    default:
+      return LOADTEST_PHASE.RUNNING
+  }
+}
+
+function isPollingPhase(phase) {
+  return phase === LOADTEST_PHASE.RUNNING || phase === LOADTEST_PHASE.ANALYZING
+}
+
+function isTemporaryPollError(message) {
+  const msg = String(message ?? '').toLowerCase()
+  if (/request failed \((429|502|503|504)\)/i.test(msg)) return true
+  if (msg.includes('upstream')) return true
+  if (msg.includes('timeout')) return true
+  if (msg.includes('temporarily')) return true
+  if (msg.includes('service unavailable')) return true
+  if (msg.includes('networkerror')) return true
+  if (msg.includes('failed to fetch')) return true
+  return false
 }
 
 // ── PriorityBadge ─────────────────────────────────────────────
@@ -416,6 +476,7 @@ function StressLabPanel() {
   const [adminKey, setAdminKey] = useState(() => localStorage.getItem('nexus_loadtest_admin_key') ?? '')
   const [runId, setRunId] = useState(null)
   const [runStatus, setRunStatus] = useState('idle')
+  const [phase, setPhase] = useState(LOADTEST_PHASE.IDLE)
   const [healthScore, setHealthScore] = useState(0)
   const [rpsSeries, setRpsSeries] = useState([])
   const [signals, setSignals] = useState([])
@@ -427,8 +488,7 @@ function StressLabPanel() {
     error_rate_pct: 0,
     vus: 0,
   })
-  const [startLoading, setStartLoading] = useState(false)
-  const [pollAfterMs, setPollAfterMs] = useState(3000)
+  const [tempPollErrors, setTempPollErrors] = useState(0)
   const [throughputShift, setThroughputShift] = useState(0)
   const [error, setError] = useState(null)
   const lastRpsRef = useRef(0)
@@ -452,8 +512,10 @@ function StressLabPanel() {
         vus: Number(data?.snapshot?.vus ?? 0),
       }
       const nextSeries = tupleSeriesToValues(data?.series?.rps)
+      const nextPhase = phaseFromRunStatus(nextStatus)
 
       setRunStatus(nextStatus)
+      setPhase(nextPhase)
       setHealthScore(Number(data?.health_score ?? 0))
       setSnapshot(nextSnapshot)
       setRpsSeries(nextSeries)
@@ -465,15 +527,31 @@ function StressLabPanel() {
       setThroughputShift(delta)
       lastRpsRef.current = nextSnapshot.rps
 
+      setTempPollErrors(0)
       setError(null)
     } catch (err) {
-      setError(err.message)
+      const message = err instanceof Error ? err.message : String(err)
+      if (isTemporaryPollError(message)) {
+        setTempPollErrors(prev => Math.min(prev + 1, BACKOFF_POLL_MS.length))
+        setPhase(prev => (
+          prev === LOADTEST_PHASE.STARTING && targetRunId
+            ? LOADTEST_PHASE.RUNNING
+            : prev
+        ))
+        setError(message)
+        return
+      }
+
+      setTempPollErrors(0)
+      setPhase(LOADTEST_PHASE.FAILED)
+      setError(message)
     }
   }
 
   async function handleStartLoadtest() {
     setError(null)
-    setStartLoading(true)
+    setPhase(LOADTEST_PHASE.STARTING)
+    setTempPollErrors(0)
     try {
       const res = await fetch('/ops/loadtest/start', {
         method: 'POST',
@@ -491,8 +569,13 @@ function StressLabPanel() {
       const data = await res.json()
 
       const nextRunId = Number(data?.run_id)
+      if (!Number.isFinite(nextRunId) || nextRunId <= 0) {
+        throw new Error('loadtest start response missing run_id')
+      }
+      const initialStatus = data?.status || 'created'
       setRunId(nextRunId)
-      setRunStatus(data?.status || 'created')
+      setRunStatus(initialStatus)
+      setPhase(phaseFromRunStatus(initialStatus))
       setRpsSeries([])
       setSignals([])
       setWarnings([])
@@ -500,27 +583,33 @@ function StressLabPanel() {
       setSnapshot({ rps: 0, p95_ms: 0, error_rate_pct: 0, vus: 0 })
       setThroughputShift(0)
       lastRpsRef.current = 0
-      setPollAfterMs(Math.max(1, Number(data?.poll_after_seconds || 3)) * 1000)
+      setTempPollErrors(0)
       await syncRun(nextRunId)
     } catch (err) {
-      setError(err.message)
-    } finally {
-      setStartLoading(false)
+      const message = err instanceof Error ? err.message : String(err)
+      setPhase(LOADTEST_PHASE.FAILED)
+      setError(message)
     }
   }
 
+  const pollDelayMs = tempPollErrors > 0
+    ? BACKOFF_POLL_MS[Math.min(tempPollErrors, BACKOFF_POLL_MS.length) - 1]
+    : DEFAULT_POLL_MS
+
   useEffect(() => {
     if (!runId) return
-    if (LOADTEST_TERMINAL.has(runStatus)) return
+    if (!isPollingPhase(phase)) return
     const t = setTimeout(() => {
       syncRun(runId)
-    }, pollAfterMs)
+    }, pollDelayMs)
     return () => clearTimeout(t)
-  }, [runId, runStatus, pollAfterMs])
+  }, [runId, phase, pollDelayMs])
 
   const statusStep = statusIndex(runStatus)
   const score = Number.isFinite(healthScore) ? Math.max(0, Math.min(100, Math.round(healthScore))) : 0
-  const running = !!runId && !LOADTEST_TERMINAL.has(runStatus)
+  const activePhase = isPollingPhase(phase)
+  const startLocked = phase === LOADTEST_PHASE.STARTING || activePhase
+  const showFinalSummary = !!runId && (phase === LOADTEST_PHASE.COMPLETED || runStatus === 'aborted')
   const hasMetrics = (
     rpsSeries.length > 0 ||
     snapshot.rps > 0 ||
@@ -528,24 +617,30 @@ function StressLabPanel() {
     snapshot.error_rate_pct > 0 ||
     snapshot.vus > 0
   )
-  const warmingUp = running && !hasMetrics
+  const warmingUp = activePhase && !hasMetrics
   const waveformValues = rpsSeries.length > 0 ? rpsSeries : (snapshot.rps > 0 ? [snapshot.rps] : [])
   const waveformPath = sparklinePath(waveformValues.length > 0 ? waveformValues : [0, 0])
   const beamStrength = Math.max(0, Math.min(1, snapshot.rps / 200 + throughputShift / 80))
   const beamDurationMs = Math.max(460, 1300 - Math.round(beamStrength * 700))
-  const beamOpacity = running && snapshot.rps > 0 ? Math.max(0.24, beamStrength) : 0.16
+  const beamOpacity = activePhase && snapshot.rps > 0 ? Math.max(0.24, beamStrength) : 0.16
   const p95Hot = snapshot.p95_ms >= P95_THRESHOLD_MS
   const errorSpike = snapshot.error_rate_pct >= ERROR_SPIKE_PCT
-  const finalInsights = LOADTEST_TERMINAL.has(runStatus)
+  const finalInsights = showFinalSummary
     ? buildFinalInsights({ signals, snapshotInsight, snapshot, warnings, runStatus })
     : []
   const primaryWarning = warnings[0] ? `Signal warning: ${warnings[0]}` : null
+  const temporaryPollingIssue = tempPollErrors > 0 && activePhase
+  const backoffSeconds = (pollDelayMs / 1000).toFixed(1)
+  const errorHint = temporaryPollingIssue
+    ? `Temporary sync issue. Auto retry in ${backoffSeconds}s.`
+    : retryHint(error)
 
   let startBtnLabel = '[ START LOAD TEST ]'
-  if (startLoading) startBtnLabel = '[ STARTING... ]'
-  else if (running) startBtnLabel = '[ LOAD TEST RUNNING ]'
-  else if (runStatus === 'completed') startBtnLabel = '[ RUN COMPLETED ]'
-  else if (runStatus === 'aborted') startBtnLabel = '[ RUN ABORTED ]'
+  if (phase === LOADTEST_PHASE.STARTING) startBtnLabel = '[ STARTING... ]'
+  else if (phase === LOADTEST_PHASE.RUNNING || phase === LOADTEST_PHASE.ANALYZING) startBtnLabel = '[ LOAD TEST RUNNING ]'
+  else if (phase === LOADTEST_PHASE.COMPLETED) startBtnLabel = '[ RUN COMPLETED ]'
+  else if (phase === LOADTEST_PHASE.FAILED && runStatus === 'aborted') startBtnLabel = '[ RUN FAILED ]'
+  else if (phase === LOADTEST_PHASE.FAILED) startBtnLabel = '[ START FAILED ]'
 
   return (
     <div className="panel stress-panel">
@@ -571,6 +666,7 @@ function StressLabPanel() {
         <span>RUN: {runId ?? '--'}</span>
         <span>STATUS: {runStatus}</span>
       </div>
+      <p className={`stress-phase ${phaseClass(phase)}`}>PHASE: {phase}</p>
       <p className="stress-flow-label">created → queued → initializing → running → processing_metrics → completed</p>
       <div className="stress-flow">
         {LOADTEST_FLOW.map((step, i) => (
@@ -596,7 +692,7 @@ function StressLabPanel() {
       </div>
 
       <div
-        className={`stress-beam${running && snapshot.rps > 0 ? ' stress-beam--active' : ''}`}
+        className={`stress-beam${activePhase && snapshot.rps > 0 ? ' stress-beam--active' : ''}`}
         style={{
           '--beam-duration': `${beamDurationMs}ms`,
           '--beam-opacity': beamOpacity,
@@ -636,7 +732,7 @@ function StressLabPanel() {
         </div>
       </div>
 
-      {LOADTEST_TERMINAL.has(runStatus) && (
+      {showFinalSummary && (
         <div key={`${runId}-${runStatus}-${score}`} className="stress-summary">
           <div className="stress-summary__header">
             <span>FINAL SCORE</span>
@@ -651,14 +747,14 @@ function StressLabPanel() {
       )}
 
       {error && <p className="form-error">// ERR: {error}</p>}
-      {error && <p className="stress-hint">{retryHint(error)}</p>}
+      {error && <p className="stress-hint">{errorHint}</p>}
       {!error && primaryWarning && <p className="stress-hint">{primaryWarning}</p>}
 
       <button
         type="button"
         className="publish-btn stress-start-btn"
         onClick={handleStartLoadtest}
-        disabled={startLoading || running}
+        disabled={startLocked}
       >
         {startBtnLabel}
       </button>
