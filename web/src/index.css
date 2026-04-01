@@ -1,0 +1,119 @@
+/* ── Reset ────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+body {
+  min-height: 100vh;
+  background: #13131f;
+  color: #e2e8f0;
+  font-family: system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+img, svg { display: block; max-width: 100%; }
+button, input, select, textarea { font: inherit; }
+
+/* ── Layout ───────────────────────────────────────────────── */
+.app          { padding: 24px; }
+.app-header   { margin-bottom: 24px; }
+.app-grid     { display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: start; }
+
+@media (max-width: 700px) {
+  .app-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Card ─────────────────────────────────────────────────── */
+.card { background: #1e1e2e; border-radius: 10px; padding: 20px; }
+
+/* ── Typography ───────────────────────────────────────────── */
+h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -.01em; }
+h2 { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
+.subtitle { font-size: 0.8125rem; color: #888; margin-top: 4px; }
+
+/* ── WS status badge ──────────────────────────────────────── */
+.ws-badge         { font-weight: 600; }
+.ws-badge--ok     { color: #10b981; }
+.ws-badge--warn   { color: #f59e0b; }
+
+/* ── Form ─────────────────────────────────────────────────── */
+.form             { display: flex; flex-direction: column; gap: 10px; }
+.form label       { display: flex; flex-direction: column; gap: 4px; font-size: 0.8125rem; color: #94a3b8; }
+.form input,
+.form select,
+.form textarea {
+  background: #13131f;
+  border: 1px solid #2d2d44;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color .15s;
+}
+.form input:focus,
+.form select:focus,
+.form textarea:focus { border-color: #6366f1; }
+.form textarea      { resize: vertical; font-family: monospace; font-size: 0.8125rem; }
+.form .error        { font-size: 0.8125rem; color: #f87171; }
+
+/* ── Button ───────────────────────────────────────────────── */
+.btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.875rem;
+  transition: opacity .15s, background .15s;
+}
+.btn-primary            { background: #6366f1; color: #fff; }
+.btn-primary:hover      { background: #4f46e5; }
+.btn-primary:disabled   { opacity: .5; cursor: not-allowed; }
+
+/* ── Notification feed ────────────────────────────────────── */
+.feed             { display: flex; flex-direction: column; gap: 6px; }
+.feed-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #13131f;
+  border-left: 4px solid var(--channel-color, #888);
+  font-family: monospace;
+  font-size: 0.8125rem;
+  animation: slide-in .2s ease;
+}
+.feed-item__channel { color: var(--channel-color, #888); font-weight: 700; }
+.feed-item__type    { color: #e2e8f0; font-weight: 600; }
+.feed-item__id      { color: #64748b; flex: 1; }
+.feed-item__status  { font-weight: 600; white-space: nowrap; }
+.feed-item__status--ok   { color: #10b981; }
+.feed-item__status--warn { color: #f59e0b; }
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Empty state ──────────────────────────────────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 0;
+  color: #475569;
+  font-size: 0.875rem;
+}
+.empty-state svg { opacity: .4; }
+
+/* ── Skeleton ─────────────────────────────────────────────── */
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(90deg, #1e1e2e 25%, #2a2a3e 50%, #1e1e2e 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
