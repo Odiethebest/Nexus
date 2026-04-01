@@ -9,6 +9,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"nexus/internal/broker"
 	"nexus/internal/idempotency"
+	"nexus/internal/mailer"
 	"nexus/internal/store"
 )
 
@@ -19,19 +20,21 @@ const (
 )
 
 // EmailWorker consumes from the email queue and delivers email notifications.
+// If m is nil the worker skips actual sending (useful when SMTP is not configured).
 type EmailWorker struct {
 	ch          *amqp.Channel
+	mailer      *mailer.Mailer
 	idempotency *idempotency.Client
 	store       *store.Store
 	poolSize    int
 }
 
 // NewEmailWorker declares the queue/DLQ and returns a ready worker.
-func NewEmailWorker(ch *amqp.Channel, idem *idempotency.Client, st *store.Store, poolSize int) (*EmailWorker, error) {
+func NewEmailWorker(ch *amqp.Channel, m *mailer.Mailer, idem *idempotency.Client, st *store.Store, poolSize int) (*EmailWorker, error) {
 	if poolSize <= 0 {
 		poolSize = EmailPoolSize
 	}
-	w := &EmailWorker{ch: ch, idempotency: idem, store: st, poolSize: poolSize}
+	w := &EmailWorker{ch: ch, mailer: m, idempotency: idem, store: st, poolSize: poolSize}
 	if err := w.setup(); err != nil {
 		return nil, err
 	}
@@ -104,18 +107,42 @@ func (w *EmailWorker) process(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 
-	// TODO: integrate SMTP / transactional email provider
-	slog.Info("email: delivering notification", "msg_id", event.MessageID, "type", event.Type)
+	status := "delivered"
+	if err := w.send(event); err != nil {
+		slog.Error("email: send failed", "msg_id", event.MessageID, "err", err)
+		status = "failed"
+		d.Nack(false, true)
+		return
+	}
 
 	if err := w.store.SaveNotification(ctx, store.Notification{
 		MessageID: event.MessageID,
 		Channel:   "email",
 		EventType: event.Type,
-		Status:    "delivered",
+		Status:    status,
 		Payload:   d.Body,
 	}); err != nil {
 		slog.Error("email: persist failed", "err", err)
 	}
 
 	d.Ack(false)
+}
+
+func (w *EmailWorker) send(event broker.Event) error {
+	if w.mailer == nil {
+		slog.Info("email: SMTP not configured, skipping send", "msg_id", event.MessageID)
+		return nil
+	}
+
+	to, _ := event.Payload["email"].(string)
+	if to == "" {
+		slog.Warn("email: no recipient in payload, skipping", "msg_id", event.MessageID)
+		return nil
+	}
+
+	subject := fmt.Sprintf("[Nexus] %s notification", event.Type)
+	body := fmt.Sprintf("Event: %s\nPriority: %s\nMessage ID: %s",
+		event.Type, event.Priority, event.MessageID)
+
+	return w.mailer.Send(to, subject, body)
 }

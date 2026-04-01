@@ -13,6 +13,7 @@ import (
 	"nexus/internal/broker"
 	"nexus/internal/hub"
 	"nexus/internal/idempotency"
+	"nexus/internal/mailer"
 	"nexus/internal/store"
 	"nexus/internal/worker"
 )
@@ -53,10 +54,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	var m *mailer.Mailer
+	if smtpHost := getenv("SMTP_HOST", ""); smtpHost != "" {
+		m = mailer.New(mailer.Config{
+			Host:     smtpHost,
+			Port:     getenv("SMTP_PORT", "587"),
+			Username: getenv("SMTP_USER", ""),
+			Password: getenv("SMTP_PASS", ""),
+			From:     getenv("EMAIL_FROM", "Nexus <no-reply@example.com>"),
+		})
+		slog.Info("mailer: SMTP configured", "host", smtpHost)
+	} else {
+		slog.Warn("mailer: SMTP_HOST not set, email sending disabled")
+	}
+
 	wsHub := hub.New()
 	ch := conn.Channel()
 
-	emailW, err := worker.NewEmailWorker(ch, idem, st, emailPool)
+	emailW, err := worker.NewEmailWorker(ch, m, idem, st, emailPool)
 	if err != nil {
 		slog.Error("failed to create email worker", "err", err)
 		os.Exit(1)
