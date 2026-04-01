@@ -61,13 +61,13 @@ func setupPipeline(t *testing.T) *pipelineEnv {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { rdb.Close() })
 
-	conn, err := broker.New(amqpURL)
+	brokerConn, err := broker.New(amqpURL)
 	if err != nil {
 		t.Fatalf("broker: %v", err)
 	}
-	t.Cleanup(conn.Close)
+	t.Cleanup(brokerConn.Close)
 
-	pub, err := broker.NewPublisher(conn)
+	pub, err := broker.NewPublisher(brokerConn)
 	if err != nil {
 		t.Fatalf("publisher: %v", err)
 	}
@@ -81,7 +81,7 @@ func setupPipeline(t *testing.T) *pipelineEnv {
 	}
 
 	return &pipelineEnv{
-		conn: conn,
+		conn: brokerConn,
 		pub:  pub,
 		st:   st,
 		idem: idempotency.New(rdb),
@@ -110,7 +110,7 @@ func TestPipeline_PublishDeliveredToDB(t *testing.T) {
 	env := setupPipeline(t)
 	ctx := context.Background()
 
-	emailW, err := worker.NewEmailWorker(env.conn.Channel(), nil, env.idem, env.st, 2)
+	emailW, err := worker.NewEmailWorker(env.conn, nil, env.idem, env.st, 2)
 	if err != nil {
 		t.Fatalf("email worker: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestPipeline_IdempotentDelivery_OneRowOnly(t *testing.T) {
 	env := setupPipeline(t)
 	ctx := context.Background()
 
-	emailW, err := worker.NewEmailWorker(env.conn.Channel(), nil, env.idem, env.st, 2)
+	emailW, err := worker.NewEmailWorker(env.conn, nil, env.idem, env.st, 2)
 	if err != nil {
 		t.Fatalf("email worker: %v", err)
 	}
@@ -179,10 +179,9 @@ func TestPipeline_MultipleWorkers_AllChannelsDeliver(t *testing.T) {
 	env := setupPipeline(t)
 	ctx := context.Background()
 
-	ch := env.conn.Channel()
-	emailW, _ := worker.NewEmailWorker(ch, nil, env.idem, env.st, 2)
-	inappW, _ := worker.NewInAppWorker(ch, hub.New(), env.idem, env.st, 2)
-	webhookW, _ := worker.NewWebhookWorker(ch, env.idem, env.st, 2)
+	emailW, _ := worker.NewEmailWorker(env.conn, nil, env.idem, env.st, 2)
+	inappW, _ := worker.NewInAppWorker(env.conn, hub.New(), env.idem, env.st, 2)
+	webhookW, _ := worker.NewWebhookWorker(env.conn, env.idem, env.st, 2)
 
 	wCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
