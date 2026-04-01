@@ -50,7 +50,12 @@ type PublishResponse struct {
 
 // ── Service implementation ────────────────────────────────────────────────────
 
-// EventServer implements the EventService gRPC API.
+// EventService is the interface gRPC uses for handler-type checking.
+type EventService interface {
+	Publish(context.Context, *PublishRequest) (*PublishResponse, error)
+}
+
+// EventServer implements EventService.
 type EventServer struct {
 	pub *broker.Publisher
 }
@@ -86,7 +91,7 @@ func (s *EventServer) Publish(ctx context.Context, req *PublishRequest) (*Publis
 // This mirrors what protoc-gen-go-grpc would generate from proto/event.proto.
 var ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "event.v1.EventService",
-	HandlerType: (*EventServer)(nil),
+	HandlerType: (*EventService)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "Publish",
@@ -103,14 +108,14 @@ func publishHandler(srv interface{}, ctx context.Context, dec func(interface{}) 
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(*EventServer).Publish(ctx, req)
+		return srv.(EventService).Publish(ctx, req)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
 		FullMethod: "/event.v1.EventService/Publish",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(*EventServer).Publish(ctx, req.(*PublishRequest))
+		return srv.(EventService).Publish(ctx, req.(*PublishRequest))
 	}
 	return interceptor(ctx, req, info, handler)
 }
