@@ -57,13 +57,13 @@ moving to the next.
 
 ---
 
-## Block 6 — Observability
+## Block 6 — Observability ✅
 > Depends on Block 5 (baseline correctness verified).
 
-- [ ] Expose Prometheus metrics endpoint (`/metrics`) in the producer
-- [ ] Add counters: messages published, messages processed per channel,
+- [x] Expose Prometheus metrics endpoint (`/metrics`) in the producer
+- [x] Add counters: messages published, messages processed per channel,
       DLQ drops, duplicate skips
-- [ ] Add a Grafana dashboard definition to `deploy/grafana/`
+- [x] Add a Grafana dashboard definition to `deploy/grafana/`
 
 ---
 
