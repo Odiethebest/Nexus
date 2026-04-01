@@ -1,0 +1,24 @@
+[build]
+builder = "DOCKERFILE"
+
+[[services]]
+name = "producer"
+source = "."
+
+[services.build]
+dockerfilePath = "deploy/Dockerfile.producer"
+
+[services.deploy]
+startCommand = "/app/producer"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+
+[[services]]
+name = "worker"
+source = "."
+
+[services.build]
+dockerfilePath = "deploy/Dockerfile.worker"
+
+[services.deploy]
+startCommand = "/app/worker"
