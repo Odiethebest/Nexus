@@ -36,6 +36,37 @@ go test ./...                              # unit only
 go test -tags=integration ./... -timeout 120s  # unit + integration
 ```
 
+### Frontend tests (9.2)
+
+```bash
+npm --prefix web run test:run
+```
+
+This runs Vitest + Testing Library suites for the Stress Lab state machine, API contract parsing, and snapshots.
+
+### Manual E2E checklist (9.3)
+
+Run API-level checklist first:
+
+```bash
+chmod +x scripts/loadtest_manual_e2e.sh
+ADMIN_KEY='<your-loadtest-admin-key>' \
+BASE_URL='http://localhost:8080' \
+./scripts/loadtest_manual_e2e.sh
+```
+
+What the script verifies:
+- Start run with valid key returns `202`.
+- Second start while active returns `409`.
+- Run status endpoint is polled until terminal state (`completed` or `aborted`).
+- Cooldown is enforced with `429` and a `retry in ...` hint (unless `EXPECT_COOLDOWN=0`).
+
+Then verify UI behavior manually in the dashboard:
+- Completed run displays `FINAL SCORE` and three insight bullets.
+- Upstream failure displays actionable error hint:
+  - easiest trigger is temporarily setting an invalid `K6_API_TOKEN`, redeploying producer, and clicking **Start Load Test**.
+- Cooldown window shows visible countdown copy (`Try again in MM:SS`).
+
 ---
 
 ## Test Coverage by Package
