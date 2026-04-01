@@ -1,0 +1,99 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+)
+
+// Notification is a persisted delivery record.
+type Notification struct {
+	MessageID string
+	Channel   string
+	EventType string
+	Status    string
+	Payload   []byte
+	CreatedAt time.Time
+}
+
+// Store persists notification history to PostgreSQL.
+type Store struct {
+	db *sql.DB
+}
+
+// New opens a connection to PostgreSQL and verifies connectivity.
+func New(dsn string) (*Store, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("store: open: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("store: ping: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+// Migrate creates the notifications table and index if they don't exist.
+func (s *Store) Migrate(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS notifications (
+			message_id  TEXT        NOT NULL,
+			channel     TEXT        NOT NULL,
+			event_type  TEXT        NOT NULL,
+			status      TEXT        NOT NULL,
+			payload     JSONB,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (message_id, channel)
+		);
+		CREATE INDEX IF NOT EXISTS notifications_created_at_idx
+			ON notifications (created_at DESC);
+	`)
+	if err != nil {
+		return fmt.Errorf("store: migrate: %w", err)
+	}
+	return nil
+}
+
+// SaveNotification upserts a delivery record.
+func (s *Store) SaveNotification(ctx context.Context, n Notification) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO notifications (message_id, channel, event_type, status, payload)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (message_id, channel) DO UPDATE
+			SET status = EXCLUDED.status
+	`, n.MessageID, n.Channel, n.EventType, n.Status, n.Payload)
+	if err != nil {
+		return fmt.Errorf("store: save notification: %w", err)
+	}
+	return nil
+}
+
+// ListNotifications returns the most recent notifications up to limit.
+func (s *Store) ListNotifications(ctx context.Context, limit int) ([]Notification, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT message_id, channel, event_type, status, payload, created_at
+		FROM notifications
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list notifications: %w", err)
+	}
+	defer rows.Close()
+
+	var result []Notification
+	for rows.Next() {
+		var n Notification
+		if err := rows.Scan(
+			&n.MessageID, &n.Channel, &n.EventType,
+			&n.Status, &n.Payload, &n.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, n)
+	}
+	return result, rows.Err()
+}
