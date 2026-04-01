@@ -17,12 +17,12 @@ moving to the next.
 
 ---
 
-## Block 2 — Broker reliability
+## Block 2 — Broker reliability ✅
 > Workers and producer depend on a stable connection.
 
-- [ ] Add publisher confirms to `internal/broker/publisher.go`
+- [x] Add publisher confirms to `internal/broker/publisher.go`
       (enable confirm mode on the channel, wait for ack before returning)
-- [ ] Add reconnect logic to `internal/broker/connection.go`
+- [x] Add reconnect logic to `internal/broker/connection.go`
       (watch the connection's NotifyClose channel, back off and re-dial)
 
 ---
