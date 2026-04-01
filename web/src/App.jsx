@@ -265,6 +265,36 @@ function retryHint(error) {
   return 'Retry once. If it still fails, check producer logs and LOADTEST environment variables.'
 }
 
+function parseRetrySeconds(error) {
+  const msg = String(error ?? '').toLowerCase()
+  const matched = msg.match(/retry in ([0-9hms]+)/i)
+  if (!matched) return 0
+  const token = matched[1]
+  const parts = [...token.matchAll(/(\d+)([hms])/g)]
+  if (parts.length === 0) return 0
+
+  let seconds = 0
+  for (const [, value, unit] of parts) {
+    const n = Number(value)
+    if (!Number.isFinite(n) || n <= 0) continue
+    if (unit === 'h') seconds += n * 3600
+    if (unit === 'm') seconds += n * 60
+    if (unit === 's') seconds += n
+  }
+  return seconds
+}
+
+function fmtCountdown(totalSeconds) {
+  const safe = Math.max(0, Number(totalSeconds) || 0)
+  const hours = Math.floor(safe / 3600)
+  const mins = Math.floor((safe % 3600) / 60)
+  const secs = safe % 60
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+  }
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
 function phaseFromRunStatus(status) {
   switch (status) {
     case 'created':
@@ -489,6 +519,7 @@ function StressLabPanel() {
     vus: 0,
   })
   const [tempPollErrors, setTempPollErrors] = useState(0)
+  const [cooldownSeconds, setCooldownSeconds] = useState(0)
   const [throughputShift, setThroughputShift] = useState(0)
   const [error, setError] = useState(null)
   const lastRpsRef = useRef(0)
@@ -496,6 +527,23 @@ function StressLabPanel() {
   useEffect(() => {
     localStorage.setItem('nexus_loadtest_admin_key', adminKey)
   }, [adminKey])
+
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return
+    const t = setTimeout(() => {
+      setCooldownSeconds(prev => Math.max(0, prev - 1))
+    }, 1000)
+    return () => clearTimeout(t)
+  }, [cooldownSeconds])
+
+  useEffect(() => {
+    if (cooldownSeconds > 0) return
+    if (!error) return
+    const msg = error.toLowerCase()
+    if (msg.includes('cooldown') || msg.includes('start throttled')) {
+      setError(null)
+    }
+  }, [cooldownSeconds, error])
 
   async function syncRun(targetRunId) {
     if (!targetRunId) return
@@ -528,6 +576,7 @@ function StressLabPanel() {
       lastRpsRef.current = nextSnapshot.rps
 
       setTempPollErrors(0)
+      setCooldownSeconds(0)
       setError(null)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -544,6 +593,7 @@ function StressLabPanel() {
 
       setTempPollErrors(0)
       setPhase(LOADTEST_PHASE.FAILED)
+      setCooldownSeconds(parseRetrySeconds(message))
       setError(message)
     }
   }
@@ -552,6 +602,7 @@ function StressLabPanel() {
     setError(null)
     setPhase(LOADTEST_PHASE.STARTING)
     setTempPollErrors(0)
+    setCooldownSeconds(0)
     try {
       const res = await fetch('/ops/loadtest/start', {
         method: 'POST',
@@ -584,10 +635,12 @@ function StressLabPanel() {
       setThroughputShift(0)
       lastRpsRef.current = 0
       setTempPollErrors(0)
+      setCooldownSeconds(0)
       await syncRun(nextRunId)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       setPhase(LOADTEST_PHASE.FAILED)
+      setCooldownSeconds(parseRetrySeconds(message))
       setError(message)
     }
   }
@@ -608,7 +661,7 @@ function StressLabPanel() {
   const statusStep = statusIndex(runStatus)
   const score = Number.isFinite(healthScore) ? Math.max(0, Math.min(100, Math.round(healthScore))) : 0
   const activePhase = isPollingPhase(phase)
-  const startLocked = phase === LOADTEST_PHASE.STARTING || activePhase
+  const startLocked = phase === LOADTEST_PHASE.STARTING || activePhase || cooldownSeconds > 0
   const showFinalSummary = !!runId && (phase === LOADTEST_PHASE.COMPLETED || runStatus === 'aborted')
   const hasMetrics = (
     rpsSeries.length > 0 ||
@@ -631,16 +684,19 @@ function StressLabPanel() {
   const primaryWarning = warnings[0] ? `Signal warning: ${warnings[0]}` : null
   const temporaryPollingIssue = tempPollErrors > 0 && activePhase
   const backoffSeconds = (pollDelayMs / 1000).toFixed(1)
-  const errorHint = temporaryPollingIssue
+  const cooldownCopy = cooldownSeconds > 0 ? `Try again in ${fmtCountdown(cooldownSeconds)}` : ''
+  const errorHint = cooldownCopy || (temporaryPollingIssue
     ? `Temporary sync issue. Auto retry in ${backoffSeconds}s.`
-    : retryHint(error)
+    : retryHint(error))
 
-  let startBtnLabel = '[ START LOAD TEST ]'
-  if (phase === LOADTEST_PHASE.STARTING) startBtnLabel = '[ STARTING... ]'
-  else if (phase === LOADTEST_PHASE.RUNNING || phase === LOADTEST_PHASE.ANALYZING) startBtnLabel = '[ LOAD TEST RUNNING ]'
-  else if (phase === LOADTEST_PHASE.COMPLETED) startBtnLabel = '[ RUN COMPLETED ]'
-  else if (phase === LOADTEST_PHASE.FAILED && runStatus === 'aborted') startBtnLabel = '[ RUN FAILED ]'
-  else if (phase === LOADTEST_PHASE.FAILED) startBtnLabel = '[ START FAILED ]'
+  let startBtnLabel = 'Start Load Test'
+  if (phase === LOADTEST_PHASE.STARTING || phase === LOADTEST_PHASE.RUNNING || phase === LOADTEST_PHASE.ANALYZING) {
+    startBtnLabel = 'Load Test Running'
+  } else if (phase === LOADTEST_PHASE.COMPLETED) {
+    startBtnLabel = 'Run Completed'
+  } else if (phase === LOADTEST_PHASE.FAILED && runStatus === 'aborted') {
+    startBtnLabel = 'Run Failed'
+  }
 
   return (
     <div className="panel stress-panel">

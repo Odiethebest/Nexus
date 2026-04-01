@@ -598,6 +598,8 @@ select {
 
 .stress-start-btn {
   margin-top: 4px;
+  text-transform: none;
+  letter-spacing: 0.04em;
 }
 
 /* ── Priority badge ────────────────────────────────────────── */
