@@ -5,14 +5,14 @@ moving to the next.
 
 ---
 
-## Block 1 — Local environment bootstrap
+## Block 1 — Local environment bootstrap ✅
 > Nothing else can be tested until this is in place.
 
-- [ ] Add `.env.example` with all required env vars
+- [x] Add `.env.example` with all required env vars
       (`AMQP_URL`, `REDIS_URL`, `POSTGRES_DSN`, `LISTEN_ADDR`,
       `EMAIL_WORKER_POOL`, `INAPP_WORKER_POOL`, `WEBHOOK_WORKER_POOL`)
-- [ ] Run `npm install` inside `web/` and commit `package-lock.json`
-- [ ] Verify `docker compose -f deploy/docker-compose.yml up` brings up
+- [x] Run `npm install` inside `web/` and commit `package-lock.json`
+- [x] Verify `docker compose -f deploy/docker-compose.yml up` brings up
       all five services cleanly end-to-end
 
 ---
