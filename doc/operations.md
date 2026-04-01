@@ -51,8 +51,14 @@ Web UI: `http://localhost:9090`
 | `nexus_messages_processed_total` | Counter | `channel`, `status` | Worker outcomes per channel |
 | `nexus_publish_duration_seconds` | Histogram | — | End-to-end publish latency incl. broker ack |
 | `nexus_worker_process_duration_seconds` | Histogram | `channel` | Per-message processing time |
+| `nexus_loadtest_start_total` | Counter | `status` | Loadtest start attempts by outcome |
+| `nexus_loadtest_upstream_latency_seconds` | Histogram | `endpoint` | Upstream k6 API latency by endpoint class |
+| `nexus_loadtest_active_runs` | Gauge | — | Active loadtest runs tracked by guard |
+| `nexus_loadtest_health_score` | Gauge | — | Latest computed loadtest health score |
 
 `status` label values: `delivered`, `failed`, `duplicate`, `dlq`.
+`nexus_loadtest_start_total{status}` values: `ok`, `deny`, `error`.
+`nexus_loadtest_upstream_latency_seconds{endpoint}` values: `start`, `run`, `query`, `other`.
 
 ### Grafana
 

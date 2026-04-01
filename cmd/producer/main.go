@@ -23,7 +23,7 @@ import (
 	"nexus/internal/grpcserver"
 	"nexus/internal/hub"
 	"nexus/internal/loadtest"
-	_ "nexus/internal/metrics" // register Prometheus collectors
+	"nexus/internal/metrics"
 	"nexus/internal/replay"
 	"nexus/internal/store"
 	nexusweb "nexus/web"
@@ -271,11 +271,13 @@ func handleLoadtestStart(svc *loadtest.Service, latest *atomic.Int64) http.Handl
 			},
 		)
 		if err != nil {
+			metrics.LoadtestStartTotal.WithLabelValues(classifyLoadtestStartOutcome(err)).Inc()
 			status, message := mapLoadtestError(err)
 			slog.Warn("loadtest start failed", "status", status, "err", err)
 			writeJSONError(w, status, message)
 			return
 		}
+		metrics.LoadtestStartTotal.WithLabelValues("ok").Inc()
 
 		latest.Store(started.RunID)
 
@@ -410,6 +412,20 @@ func mapLoadtestError(err error) (int, string) {
 			return http.StatusBadGateway, "upstream loadtest API failed"
 		}
 		return http.StatusInternalServerError, "internal error"
+	}
+}
+
+func classifyLoadtestStartOutcome(err error) string {
+	switch {
+	case errors.Is(err, loadtest.ErrUnauthorized),
+		errors.Is(err, loadtest.ErrDisabled),
+		errors.Is(err, loadtest.ErrParallelLimit),
+		errors.Is(err, loadtest.ErrCooldown),
+		errors.Is(err, loadtest.ErrThrottled),
+		errors.Is(err, loadtest.ErrBudgetExceeded):
+		return "deny"
+	default:
+		return "error"
 	}
 }
 

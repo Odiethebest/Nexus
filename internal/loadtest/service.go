@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"nexus/internal/metrics"
 	"strings"
 	"sync"
 	"time"
@@ -100,6 +101,7 @@ func (s *Service) Start(
 		startedAt = now
 	}
 	reservation.Commit(run.ID, startedAt)
+	metrics.LoadtestActiveRuns.Set(float64(s.guard.ActiveCount()))
 
 	return StartResult{
 		RunID:     run.ID,
@@ -129,12 +131,14 @@ func (s *Service) SyncRun(ctx context.Context, runID int64) (RunInsight, error) 
 	series, warnings := s.fetchCoreSeries(ctx, run.ID)
 	snapshot := buildSnapshot(series)
 	score, signals := scoreRun(run, series, snapshot)
+	metrics.LoadtestHealthScore.Set(float64(score))
 	if len(warnings) > 0 {
 		signals = append(signals, "Some metric queries are temporarily unavailable")
 	}
 
 	if run.Status.IsTerminal() {
 		s.guard.MarkFinished(run.ID, s.now().UTC())
+		metrics.LoadtestActiveRuns.Set(float64(s.guard.ActiveCount()))
 		s.accountRunCost(run)
 	}
 

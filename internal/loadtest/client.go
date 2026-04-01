@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"nexus/internal/metrics"
 	"sort"
 	"strconv"
 	"strings"
@@ -294,6 +295,7 @@ func (c *Client) doJSON(
 	body any,
 ) ([]byte, error) {
 	endpoint := c.baseURL + path
+	endpointLabel := classifyUpstreamEndpoint(path)
 	if len(query) > 0 {
 		endpoint += "?" + query.Encode()
 	}
@@ -315,7 +317,7 @@ func (c *Client) doJSON(
 			return nil, err
 		}
 
-		raw, err := c.doJSONOnce(ctx, method, endpoint, payload)
+		raw, err := c.doJSONOnce(ctx, method, endpoint, endpointLabel, payload)
 		if err == nil {
 			c.recordSuccess()
 			return raw, nil
@@ -356,8 +358,14 @@ func (c *Client) doJSONOnce(
 	ctx context.Context,
 	method string,
 	endpoint string,
+	endpointLabel string,
 	payload []byte,
 ) ([]byte, error) {
+	start := time.Now()
+	defer func() {
+		metrics.LoadtestUpstreamLatency.WithLabelValues(endpointLabel).Observe(time.Since(start).Seconds())
+	}()
+
 	var bodyReader io.Reader
 	if payload != nil {
 		bodyReader = bytes.NewReader(payload)
@@ -497,6 +505,19 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 		return false
 	case <-timer.C:
 		return true
+	}
+}
+
+func classifyUpstreamEndpoint(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/cloud/v6/load_tests/"):
+		return "start"
+	case strings.HasPrefix(path, "/cloud/v6/test_runs/"):
+		return "run"
+	case strings.HasPrefix(path, "/cloud/v5/test_runs/"):
+		return "query"
+	default:
+		return "other"
 	}
 }
 
