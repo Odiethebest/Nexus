@@ -10,8 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"nexus/internal/broker"
 	"nexus/internal/hub"
+	_ "nexus/internal/metrics" // register Prometheus collectors
 	"nexus/internal/store"
 )
 
@@ -48,6 +50,7 @@ func main() {
 	mux.HandleFunc("POST /events", handlePublish(pub))
 	mux.HandleFunc("GET /notifications", handleListNotifications(st))
 	mux.HandleFunc("GET /ws", wsHub.ServeWS)
+	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

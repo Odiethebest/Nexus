@@ -9,11 +9,15 @@ import (
 	"sync"
 	"syscall"
 
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"nexus/internal/broker"
 	"nexus/internal/hub"
 	"nexus/internal/idempotency"
 	"nexus/internal/mailer"
+	_ "nexus/internal/metrics" // register Prometheus collectors
 	"nexus/internal/store"
 	"nexus/internal/worker"
 )
@@ -103,6 +107,18 @@ func main() {
 			}
 		}()
 	}
+
+	// Expose Prometheus metrics on a dedicated port so Prometheus can scrape
+	// the worker independently from the producer.
+	metricsAddr := getenv("METRICS_ADDR", ":9091")
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		slog.Info("worker metrics listening", "addr", metricsAddr)
+		if err := http.ListenAndServe(metricsAddr, mux); err != nil {
+			slog.Error("metrics server error", "err", err)
+		}
+	}()
 
 	run("email", emailW.Run)
 	run("inapp", inappW.Run)
