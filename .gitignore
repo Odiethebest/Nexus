@@ -1,0 +1,13 @@
+# binaries
+producer
+worker
+
+# env
+.env
+
+# frontend
+web/node_modules/
+web/dist/
+
+# Go test cache
+*.test
