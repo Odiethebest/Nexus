@@ -4,6 +4,26 @@ import { useState, useEffect, useRef } from 'react'
 const PRIORITY_COLOR = { high: '#ff2d6b', normal: '#f5e642', low: '#00d4ff' }
 const BADGE_CLASS    = { high: 'badge-high', normal: 'badge-normal', low: 'badge-low' }
 
+// Per-priority card styles (border-left width + bg + optional extra shadow)
+const CARD_STYLE = {
+  high: {
+    borderLeftWidth: '6px',
+    borderLeftColor: '#ff2d6b',
+    background: 'rgba(255,45,107,0.05)',
+    boxShadow: 'inset -2px 0 20px rgba(255,45,107,0.08)',
+  },
+  normal: {
+    borderLeftWidth: '4px',
+    borderLeftColor: '#f5e642',
+    background: 'rgba(245,230,66,0.03)',
+  },
+  low: {
+    borderLeftWidth: '2px',
+    borderLeftColor: '#00d4ff',
+    background: 'transparent',
+  },
+}
+
 function sysTime(date) {
   const mins = Math.floor((Date.now() - new Date(date)) / 60000)
   return `SYS_TIME: ${mins < 1 ? 'NOW' : `${mins}M`}`
@@ -26,11 +46,12 @@ function PriorityBadge({ priority }) {
 
 // ── PublishPanel ──────────────────────────────────────────────
 function PublishPanel({ onPublished }) {
-  const [type, setPriority_type] = useState('order')
-  const [priority, setPriority]  = useState('high')
-  const [payload, setPayload]    = useState('{"user_id":"u123","email":"user@example.com"}')
-  const [loading, setLoading]    = useState(false)
-  const [error, setError]        = useState(null)
+  const [type, setType]              = useState('order')
+  const [priority, setPriority]      = useState('high')
+  const [payload, setPayload]        = useState('{"user_id":"u123","email":"user@example.com"}')
+  const [loading, setLoading]        = useState(false)
+  const [transmitted, setTransmitted] = useState(false)
+  const [error, setError]            = useState(null)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -48,6 +69,11 @@ function PublishPanel({ onPublished }) {
       })
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
+
+      // Flash "transmitted" feedback for 300ms
+      setTransmitted(true)
+      setTimeout(() => setTransmitted(false), 300)
+
       onPublished({ message_id: data.message_id, type, priority, payload: parsed, timestamp: new Date() })
     } catch (err) {
       setError(err.message)
@@ -55,6 +81,10 @@ function PublishPanel({ onPublished }) {
       setLoading(false)
     }
   }
+
+  let btnLabel = '[ PUBLISH ]'
+  if (loading)      btnLabel = '[ TRANSMITTING... ]'
+  if (transmitted)  btnLabel = '[ TRANSMITTED ]'
 
   return (
     <div className="panel">
@@ -68,7 +98,7 @@ function PublishPanel({ onPublished }) {
           <input
             type="text"
             value={type}
-            onChange={e => setPriority_type(e.target.value)}
+            onChange={e => setType(e.target.value)}
             placeholder="order / payment / alert"
             required
           />
@@ -97,8 +127,12 @@ function PublishPanel({ onPublished }) {
 
         {error && <p className="form-error">// ERR: {error}</p>}
 
-        <button className="publish-btn" type="submit" disabled={loading}>
-          {loading ? '[ TRANSMITTING... ]' : '[ PUBLISH ]'}
+        <button
+          className={`publish-btn${transmitted ? ' publish-btn--transmitted' : ''}`}
+          type="submit"
+          disabled={loading}
+        >
+          {btnLabel}
         </button>
       </form>
     </div>
@@ -111,7 +145,9 @@ function EmptyState() {
     <div className="empty-state">
       <div className="empty-icon">▓▓▓</div>
       <span className="empty-title">Awaiting Signal</span>
-      <span className="empty-sub">No events detected. Publish one using the form to initiate transmission.</span>
+      <span className="empty-sub">
+        No events detected. Publish one using the form to initiate transmission.
+      </span>
     </div>
   )
 }
@@ -121,7 +157,7 @@ function SkeletonFeed() {
   return (
     <div className="skeleton-feed">
       {[85, 70, 78].map(w => (
-        <div key={w} className="skeleton" style={{ height: 68, width: `${w}%` }} />
+        <div key={w} className="skeleton" style={{ height: 72, width: `${w}%` }} />
       ))}
     </div>
   )
@@ -148,12 +184,12 @@ function NotificationsPanel({ notifications, initialising }) {
         ) : (
           <div className="notif-list">
             {notifications.map((n, i) => {
-              const color = PRIORITY_COLOR[n.priority] ?? '#f5e642'
+              const cardStyle = CARD_STYLE[n.priority] ?? CARD_STYLE.normal
               return (
                 <div
                   className="notif-card"
                   key={`${n.message_id}-${i}`}
-                  style={{ '--priority-color': color }}
+                  style={cardStyle}
                 >
                   <div className="notif-card__header">
                     <span className="notif-card__type">{n.type}</span>
@@ -189,13 +225,9 @@ export default function App() {
     function connect() {
       const ws = new WebSocket(`ws://${location.host}/ws`)
       wsRef.current = ws
-
-      ws.onopen = () => setWsStatus('connected')
-      ws.onclose = () => {
-        setWsStatus('disconnected')
-        setTimeout(connect, 3000)
-      }
-      ws.onerror = () => setWsStatus('disconnected')
+      ws.onopen    = () => setWsStatus('connected')
+      ws.onclose   = () => { setWsStatus('disconnected'); setTimeout(connect, 3000) }
+      ws.onerror   = () => setWsStatus('disconnected')
       ws.onmessage = e => {
         try {
           const ev = JSON.parse(e.data)
