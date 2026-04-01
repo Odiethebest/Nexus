@@ -73,21 +73,20 @@ func main() {
 	}
 
 	wsHub := hub.New()
-	ch := conn.Channel()
 
-	emailW, err := worker.NewEmailWorker(ch, m, idem, st, emailPool)
+	emailW, err := worker.NewEmailWorker(conn, m, idem, st, emailPool)
 	if err != nil {
 		slog.Error("failed to create email worker", "err", err)
 		os.Exit(1)
 	}
 
-	inappW, err := worker.NewInAppWorker(ch, wsHub, idem, st, inappPool)
+	inappW, err := worker.NewInAppWorker(conn, wsHub, idem, st, inappPool)
 	if err != nil {
 		slog.Error("failed to create inapp worker", "err", err)
 		os.Exit(1)
 	}
 
-	webhookW, err := worker.NewWebhookWorker(ch, idem, st, webhookPool)
+	webhookW, err := worker.NewWebhookWorker(conn, idem, st, webhookPool)
 	if err != nil {
 		slog.Error("failed to create webhook worker", "err", err)
 		os.Exit(1)
