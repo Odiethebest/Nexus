@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 
 // ── Helpers ───────────────────────────────────────────────────
-const BADGE_CLASS = { high: 'badge-high', normal: 'badge-normal', low: 'badge-low' }
+const PRIORITY_COLOR = { high: '#ff2d6b', normal: '#f5e642', low: '#00d4ff' }
+const BADGE_CLASS    = { high: 'badge-high', normal: 'badge-normal', low: 'badge-low' }
 
-function relativeTime(date) {
+function sysTime(date) {
   const mins = Math.floor((Date.now() - new Date(date)) / 60000)
-  return mins < 1 ? 'just now' : `${mins}m ago`
+  return `SYS_TIME: ${mins < 1 ? 'NOW' : `${mins}M`}`
 }
 
 function fmtPayload(payload) {
@@ -25,11 +26,11 @@ function PriorityBadge({ priority }) {
 
 // ── PublishPanel ──────────────────────────────────────────────
 function PublishPanel({ onPublished }) {
-  const [type, setType]       = useState('order')
-  const [priority, setPriority] = useState('high')
-  const [payload, setPayload] = useState('{"user_id":"u123","email":"user@example.com"}')
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState(null)
+  const [type, setPriority_type] = useState('order')
+  const [priority, setPriority]  = useState('high')
+  const [payload, setPayload]    = useState('{"user_id":"u123","email":"user@example.com"}')
+  const [loading, setLoading]    = useState(false)
+  const [error, setError]        = useState(null)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -38,7 +39,7 @@ function PublishPanel({ onPublished }) {
     try {
       let parsed
       try { parsed = JSON.parse(payload) }
-      catch { throw new Error('Payload must be valid JSON') }
+      catch { throw new Error('PAYLOAD IS NOT VALID JSON') }
 
       const res = await fetch('/events', {
         method: 'POST',
@@ -57,7 +58,9 @@ function PublishPanel({ onPublished }) {
 
   return (
     <div className="panel">
-      <span className="panel-title">Publish Event</span>
+      <span className="panel-title">
+        <span className="slash">╱</span> Publish Event
+      </span>
 
       <form onSubmit={handleSubmit} style={{ display: 'contents' }}>
         <div className="field-group">
@@ -65,8 +68,8 @@ function PublishPanel({ onPublished }) {
           <input
             type="text"
             value={type}
-            onChange={e => setType(e.target.value)}
-            placeholder="e.g. order, payment, alert"
+            onChange={e => setPriority_type(e.target.value)}
+            placeholder="order / payment / alert"
             required
           />
         </div>
@@ -92,10 +95,10 @@ function PublishPanel({ onPublished }) {
           />
         </div>
 
-        {error && <p className="form-error">{error}</p>}
+        {error && <p className="form-error">// ERR: {error}</p>}
 
         <button className="publish-btn" type="submit" disabled={loading}>
-          {loading ? 'Publishing…' : 'Publish'}
+          {loading ? '[ TRANSMITTING... ]' : '[ PUBLISH ]'}
         </button>
       </form>
     </div>
@@ -106,20 +109,9 @@ function PublishPanel({ onPublished }) {
 function EmptyState() {
   return (
     <div className="empty-state">
-      <div className="empty-icon">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path
-            d="M8 1.5C5 1.5 3 3.5 3 6.5V10l-1.5 1.5v.5h13V11.5L13 10V6.5C13 3.5 11 1.5 8 1.5Z"
-            stroke="#b4b2a9" strokeWidth="1.2" strokeLinejoin="round"
-          />
-          <path
-            d="M6.5 12.5a1.5 1.5 0 003 0"
-            stroke="#b4b2a9" strokeWidth="1.2" strokeLinecap="round"
-          />
-        </svg>
-      </div>
-      <span className="empty-title">Waiting for events</span>
-      <span className="empty-sub">Publish one using the form on the left</span>
+      <div className="empty-icon">▓▓▓</div>
+      <span className="empty-title">Awaiting Signal</span>
+      <span className="empty-sub">No events detected. Publish one using the form to initiate transmission.</span>
     </div>
   )
 }
@@ -128,8 +120,8 @@ function EmptyState() {
 function SkeletonFeed() {
   return (
     <div className="skeleton-feed">
-      {[80, 65, 72].map(w => (
-        <div key={w} className="skeleton" style={{ height: 64, width: `${w}%` }} />
+      {[85, 70, 78].map(w => (
+        <div key={w} className="skeleton" style={{ height: 68, width: `${w}%` }} />
       ))}
     </div>
   )
@@ -142,10 +134,10 @@ function NotificationsPanel({ notifications, initialising }) {
   return (
     <div className="panel notif-panel">
       <div className="notif-header">
-        <span className="panel-title">Live Notifications</span>
-        <span className="notif-count">
-          {count} {count === 1 ? 'event' : 'events'}
+        <span className="panel-title">
+          <span className="slash">╱</span> Live Notifications
         </span>
+        <span className="notif-count">{count} EVT</span>
       </div>
 
       <div className="notif-body">
@@ -155,18 +147,25 @@ function NotificationsPanel({ notifications, initialising }) {
           <EmptyState />
         ) : (
           <div className="notif-list">
-            {notifications.map((n, i) => (
-              <div className="notif-card" key={`${n.message_id}-${i}`}>
-                <div className="notif-card__header">
-                  <span className="notif-card__type">{n.type}</span>
-                  <div className="notif-card__meta">
-                    <PriorityBadge priority={n.priority} />
-                    <span className="notif-card__time">{relativeTime(n.timestamp)}</span>
+            {notifications.map((n, i) => {
+              const color = PRIORITY_COLOR[n.priority] ?? '#f5e642'
+              return (
+                <div
+                  className="notif-card"
+                  key={`${n.message_id}-${i}`}
+                  style={{ '--priority-color': color }}
+                >
+                  <div className="notif-card__header">
+                    <span className="notif-card__type">{n.type}</span>
+                    <div className="notif-card__meta">
+                      <PriorityBadge priority={n.priority} />
+                      <span className="notif-card__time">{sysTime(n.timestamp)}</span>
+                    </div>
                   </div>
+                  <span className="notif-card__payload">{fmtPayload(n.payload)}</span>
                 </div>
-                <span className="notif-card__payload">{fmtPayload(n.payload)}</span>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
@@ -221,10 +220,14 @@ export default function App() {
 
   return (
     <>
-      <header className="page-header">
-        <span className="page-title">Nexus Dashboard</span>
+      <header className="topbar">
+        <span className="topbar-title">
+          <span className="bar-glyph">▋</span>Nexus Dashboard
+        </span>
         <div className="status-row">
-          <div className={`status-dot${connected ? ' status-dot--connected' : ''}`} />
+          <span className={`status-square ${connected ? 'status-square--connected' : 'status-square--disconnected'}`}>
+            ■
+          </span>
           <span className="status-text">{wsStatus}</span>
         </div>
       </header>
