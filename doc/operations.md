@@ -112,9 +112,15 @@ For one-click loadtest (producer service), also set:
 | `LOADTEST_ENABLED` | yes | Set `true` to enable the feature |
 | `LOADTEST_ADMIN_KEY` | yes | Server-side key, never expose to browser code |
 | `LOADTEST_COOLDOWN_SECONDS` | yes | Suggested `300` |
+| `LOADTEST_MIN_START_INTERVAL_SECONDS` | yes | Suggested `10` per actor throttle |
 | `LOADTEST_MAX_PARALLEL` | yes | Suggested `1` |
 | `LOADTEST_POLL_INTERVAL_SECONDS` | yes | Suggested `3` |
 | `LOADTEST_REQUEST_TIMEOUT_SECONDS` | yes | Suggested `20` |
+| `LOADTEST_UPSTREAM_RETRY_MAX` | yes | Suggested `2` |
+| `LOADTEST_UPSTREAM_RETRY_BASE_MS` | yes | Suggested `250` |
+| `LOADTEST_UPSTREAM_RETRY_MAX_MS` | yes | Suggested `2000` |
+| `LOADTEST_CIRCUIT_BREAKER_THRESHOLD` | yes | Suggested `5` |
+| `LOADTEST_CIRCUIT_BREAKER_OPEN_SECONDS` | yes | Suggested `30` |
 | `K6_API_BASE` | yes | `https://api.k6.io` |
 | `K6_API_TOKEN` | yes | Grafana Cloud k6 API token |
 | `K6_STACK_ID` | yes | Grafana stack ID for `X-Stack-Id` header |

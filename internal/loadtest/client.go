@@ -4,18 +4,26 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
 	defaultAPIBase = "https://api.k6.io"
+)
+
+var (
+	ErrCircuitOpen = errors.New("loadtest: upstream circuit open")
 )
 
 // ClientConfig configures the k6 API client.
@@ -24,6 +32,14 @@ type ClientConfig struct {
 	APIToken   string
 	StackID    string
 	HTTPClient *http.Client
+
+	RetryMaxAttempts               int
+	RetryBaseDelay                 time.Duration
+	RetryMaxDelay                  time.Duration
+	CircuitBreakerFailureThreshold int
+	CircuitBreakerOpenDuration     time.Duration
+	Now                            func() time.Time
+	RandSeed                       int64
 }
 
 // APIError wraps non-2xx responses from the k6 API.
@@ -36,12 +52,37 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("loadtest: k6 API error (%d): %s", e.StatusCode, e.Body)
 }
 
+// CircuitOpenError indicates that requests are blocked until the breaker closes.
+type CircuitOpenError struct {
+	Until time.Time
+}
+
+func (e *CircuitOpenError) Error() string {
+	return fmt.Sprintf("%v: retry after %s", ErrCircuitOpen, e.Until.UTC().Format(time.RFC3339))
+}
+
+func (e *CircuitOpenError) Unwrap() error { return ErrCircuitOpen }
+
 // Client talks to Grafana Cloud k6 APIs.
 type Client struct {
 	baseURL string
 	token   string
 	stackID string
 	http    *http.Client
+
+	retryMax   int
+	retryBase  time.Duration
+	retryCap   time.Duration
+	breakerN   int
+	breakerFor time.Duration
+	now        func() time.Time
+
+	randMu sync.Mutex
+	rand   *rand.Rand
+
+	breakerMu          sync.Mutex
+	consecutiveFailure int
+	openUntil          time.Time
 }
 
 // NewClient creates a validated client.
@@ -61,11 +102,54 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 20 * time.Second}
 	}
+
+	retryMax := cfg.RetryMaxAttempts
+	if retryMax < 0 {
+		retryMax = 0
+	}
+	retryBase := cfg.RetryBaseDelay
+	if retryBase <= 0 {
+		retryBase = 250 * time.Millisecond
+	}
+	retryCap := cfg.RetryMaxDelay
+	if retryCap <= 0 {
+		retryCap = 2 * time.Second
+	}
+	if retryCap < retryBase {
+		retryCap = retryBase
+	}
+
+	breakerThreshold := cfg.CircuitBreakerFailureThreshold
+	if breakerThreshold <= 0 {
+		breakerThreshold = 5
+	}
+	breakerFor := cfg.CircuitBreakerOpenDuration
+	if breakerFor <= 0 {
+		breakerFor = 30 * time.Second
+	}
+
+	nowFn := cfg.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+
+	seed := cfg.RandSeed
+	if seed == 0 {
+		seed = nowFn().UnixNano()
+	}
+
 	return &Client{
-		baseURL: base,
-		token:   cfg.APIToken,
-		stackID: cfg.StackID,
-		http:    httpClient,
+		baseURL:    base,
+		token:      cfg.APIToken,
+		stackID:    cfg.StackID,
+		http:       httpClient,
+		retryMax:   retryMax,
+		retryBase:  retryBase,
+		retryCap:   retryCap,
+		breakerN:   breakerThreshold,
+		breakerFor: breakerFor,
+		now:        nowFn,
+		rand:       rand.New(rand.NewSource(seed)),
 	}, nil
 }
 
@@ -214,16 +298,72 @@ func (c *Client) doJSON(
 		endpoint += "?" + query.Encode()
 	}
 
-	var payload io.Reader
+	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("loadtest: marshal request body: %w", err)
 		}
-		payload = bytes.NewReader(b)
+		payload = b
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, payload)
+	maxAttempts := c.retryMax + 1
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err := c.checkCircuit(); err != nil {
+			return nil, err
+		}
+
+		raw, err := c.doJSONOnce(ctx, method, endpoint, payload)
+		if err == nil {
+			c.recordSuccess()
+			return raw, nil
+		}
+
+		lastErr = err
+		if errors.Is(err, context.Canceled) {
+			return nil, err
+		}
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
+			// Caller context expired; do not retry.
+			return nil, err
+		}
+
+		c.recordFailure()
+
+		retryable := isRetryableUpstreamErr(err)
+		if !retryable || attempt == maxAttempts {
+			break
+		}
+
+		delay := c.backoffDelay(attempt)
+		if !sleepCtx(ctx, delay) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			break
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("loadtest: request failed without explicit error")
+	}
+	return nil, lastErr
+}
+
+func (c *Client) doJSONOnce(
+	ctx context.Context,
+	method string,
+	endpoint string,
+	payload []byte,
+) ([]byte, error) {
+	var bodyReader io.Reader
+	if payload != nil {
+		bodyReader = bytes.NewReader(payload)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("loadtest: build request: %w", err)
 	}
@@ -231,7 +371,7 @@ func (c *Client) doJSON(
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("X-Stack-Id", c.stackID)
 	req.Header.Set("Accept", "application/json")
-	if body != nil {
+	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
@@ -254,6 +394,110 @@ func (c *Client) doJSON(
 		return nil, &APIError{StatusCode: res.StatusCode, Body: msg}
 	}
 	return raw, nil
+}
+
+func (c *Client) checkCircuit() error {
+	c.breakerMu.Lock()
+	defer c.breakerMu.Unlock()
+
+	now := c.now().UTC()
+	if !c.openUntil.IsZero() && now.Before(c.openUntil) {
+		return &CircuitOpenError{Until: c.openUntil}
+	}
+	return nil
+}
+
+func (c *Client) recordSuccess() {
+	c.breakerMu.Lock()
+	defer c.breakerMu.Unlock()
+	c.consecutiveFailure = 0
+	c.openUntil = time.Time{}
+}
+
+func (c *Client) recordFailure() {
+	c.breakerMu.Lock()
+	defer c.breakerMu.Unlock()
+
+	c.consecutiveFailure++
+	if c.consecutiveFailure < c.breakerN {
+		return
+	}
+
+	c.openUntil = c.now().UTC().Add(c.breakerFor)
+	c.consecutiveFailure = 0
+}
+
+func (c *Client) backoffDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+
+	// Exponential backoff with cap.
+	delay := c.retryBase
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= c.retryCap {
+			delay = c.retryCap
+			break
+		}
+	}
+
+	// Add +-25% jitter.
+	jitterMax := delay / 4
+	if jitterMax <= 0 {
+		return delay
+	}
+
+	c.randMu.Lock()
+	j := c.rand.Int63n(int64(jitterMax)*2+1) - int64(jitterMax)
+	c.randMu.Unlock()
+
+	next := delay + time.Duration(j)
+	if next < 0 {
+		return 0
+	}
+	if next > c.retryCap {
+		return c.retryCap
+	}
+	return next
+}
+
+func isRetryableUpstreamErr(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusTooManyRequests ||
+			apiErr.StatusCode == http.StatusRequestTimeout ||
+			apiErr.StatusCode >= 500
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return false
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 type testRunDTO struct {

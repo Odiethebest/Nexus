@@ -399,6 +399,8 @@ func mapLoadtestError(err error) (int, string) {
 		return http.StatusTooManyRequests, err.Error()
 	case errors.Is(err, loadtest.ErrBudgetExceeded):
 		return http.StatusTooManyRequests, err.Error()
+	case errors.Is(err, loadtest.ErrCircuitOpen):
+		return http.StatusServiceUnavailable, err.Error()
 	default:
 		var apiErr *loadtest.APIError
 		if errors.As(err, &apiErr) {
@@ -445,9 +447,10 @@ func initLoadtestService() (*loadtest.Service, error) {
 	}
 
 	guardCfg := loadtest.GuardConfig{
-		AdminKey:    os.Getenv("LOADTEST_ADMIN_KEY"),
-		MaxParallel: getenvInt("LOADTEST_MAX_PARALLEL", 1),
-		Cooldown:    time.Duration(getenvInt("LOADTEST_COOLDOWN_SECONDS", 300)) * time.Second,
+		AdminKey:         os.Getenv("LOADTEST_ADMIN_KEY"),
+		MaxParallel:      getenvInt("LOADTEST_MAX_PARALLEL", 1),
+		Cooldown:         time.Duration(getenvInt("LOADTEST_COOLDOWN_SECONDS", 300)) * time.Second,
+		MinStartInterval: time.Duration(getenvInt("LOADTEST_MIN_START_INTERVAL_SECONDS", 0)) * time.Second,
 	}
 
 	guard := loadtest.NewGuard(guardCfg)
@@ -470,6 +473,11 @@ func initLoadtestService() (*loadtest.Service, error) {
 		HTTPClient: &http.Client{
 			Timeout: timeout,
 		},
+		RetryMaxAttempts:               getenvInt("LOADTEST_UPSTREAM_RETRY_MAX", 2),
+		RetryBaseDelay:                 time.Duration(getenvInt("LOADTEST_UPSTREAM_RETRY_BASE_MS", 250)) * time.Millisecond,
+		RetryMaxDelay:                  time.Duration(getenvInt("LOADTEST_UPSTREAM_RETRY_MAX_MS", 2000)) * time.Millisecond,
+		CircuitBreakerFailureThreshold: getenvInt("LOADTEST_CIRCUIT_BREAKER_THRESHOLD", 5),
+		CircuitBreakerOpenDuration:     time.Duration(getenvInt("LOADTEST_CIRCUIT_BREAKER_OPEN_SECONDS", 30)) * time.Second,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("loadtest client: %w", err)

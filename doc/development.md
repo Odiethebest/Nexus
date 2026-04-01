@@ -53,9 +53,15 @@ Both binaries read configuration from environment variables. Copy `.env.example`
 | `LOADTEST_ENABLED` | `true` | Enables one-click loadtest endpoints (when implemented) |
 | `LOADTEST_ADMIN_KEY` | `replace_me` | Admin key required by loadtest start endpoint |
 | `LOADTEST_COOLDOWN_SECONDS` | `300` | Cooldown after each loadtest run |
+| `LOADTEST_MIN_START_INTERVAL_SECONDS` | `10` | Minimum interval between start attempts per actor |
 | `LOADTEST_MAX_PARALLEL` | `1` | Maximum concurrent loadtest runs |
 | `LOADTEST_POLL_INTERVAL_SECONDS` | `3` | Poll interval for loadtest status/metrics |
 | `LOADTEST_REQUEST_TIMEOUT_SECONDS` | `20` | Upstream k6 API timeout per request |
+| `LOADTEST_UPSTREAM_RETRY_MAX` | `2` | Upstream retry attempts after first request |
+| `LOADTEST_UPSTREAM_RETRY_BASE_MS` | `250` | Base backoff in milliseconds for retry |
+| `LOADTEST_UPSTREAM_RETRY_MAX_MS` | `2000` | Maximum retry backoff in milliseconds |
+| `LOADTEST_CIRCUIT_BREAKER_THRESHOLD` | `5` | Consecutive upstream failures before opening circuit |
+| `LOADTEST_CIRCUIT_BREAKER_OPEN_SECONDS` | `30` | Circuit open duration before half-open retry |
 | `K6_API_BASE` | `https://api.k6.io` | Grafana Cloud k6 API base URL |
 | `K6_API_TOKEN` | *(empty)* | Grafana Cloud k6 API token |
 | `K6_STACK_ID` | *(empty)* | Grafana stack ID passed in `X-Stack-Id` |
