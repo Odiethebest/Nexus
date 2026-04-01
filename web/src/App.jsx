@@ -502,7 +502,7 @@ function PublishPanel({ onPublished }) {
 }
 
 // ── StressLabPanel ───────────────────────────────────────────
-function StressLabPanel() {
+export function StressLabPanel() {
   const [adminKey, setAdminKey] = useState(() => localStorage.getItem('nexus_loadtest_admin_key') ?? '')
   const [runId, setRunId] = useState(null)
   const [runStatus, setRunStatus] = useState('idle')

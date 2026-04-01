@@ -1,0 +1,470 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`StressLabPanel snapshots > matches completed state snapshot 1`] = `
+<div
+  class="panel stress-panel"
+>
+  <div
+    class="stress-header"
+  >
+    <span
+      class="panel-title"
+    >
+      <span
+        class="slash"
+      >
+        ╱
+      </span>
+       Stress Lab
+    </span>
+    <span
+      class="stress-score stress-score--high"
+    >
+      84
+    </span>
+  </div>
+  <div
+    class="field-group"
+  >
+    <label
+      class="field-label"
+    >
+      Admin Key
+    </label>
+    <input
+      autocomplete="off"
+      placeholder="X-Admin-Key"
+      type="password"
+      value=""
+    />
+  </div>
+  <div
+    class="stress-run-meta"
+  >
+    <span>
+      RUN: 
+      52
+    </span>
+    <span>
+      STATUS: 
+      completed
+    </span>
+  </div>
+  <p
+    class="stress-phase stress-phase--completed"
+  >
+    PHASE: 
+    completed
+  </p>
+  <p
+    class="stress-flow-label"
+  >
+    created → queued → initializing → running → processing_metrics → completed
+  </p>
+  <div
+    class="stress-flow"
+  >
+    <span
+      class="stress-step stress-step--active"
+      title="created"
+    />
+    <span
+      class="stress-step stress-step--active"
+      title="queued"
+    />
+    <span
+      class="stress-step stress-step--active"
+      title="initializing"
+    />
+    <span
+      class="stress-step stress-step--active"
+      title="running"
+    />
+    <span
+      class="stress-step stress-step--active"
+      title="processing_metrics"
+    />
+    <span
+      class="stress-step stress-step--active"
+      title="completed"
+    />
+  </div>
+  <div
+    class="stress-wave-wrap"
+  >
+    <div
+      class="stress-wave-meta"
+    >
+      <span>
+        RPS WAVEFORM
+      </span>
+      <span>
+        88.4 LIVE
+      </span>
+    </div>
+    <div
+      class="stress-wave stress-wave--active"
+    >
+      <svg
+        aria-label="RPS waveform"
+        preserveAspectRatio="none"
+        role="img"
+        viewBox="0 0 320 64"
+      >
+        <path
+          class="stress-wave-midline"
+          d="M 0 32 L 320 32"
+        />
+        <path
+          class="stress-wave-line"
+          d="M 6.0 58.0 L 314.0 6.0"
+        />
+      </svg>
+    </div>
+  </div>
+  <div
+    class="stress-beam"
+    style="--beam-duration: 600ms; --beam-opacity: 0.16;"
+  >
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 0ms;"
+    />
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 70ms;"
+    />
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 140ms;"
+    />
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 210ms;"
+    />
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 280ms;"
+    />
+  </div>
+  <p
+    class="stress-runtime-insight"
+  >
+    Run closed with healthy margins.
+  </p>
+  <div
+    class="stress-cards"
+  >
+    <div
+      class="stress-card"
+    >
+      <span
+        class="stress-card__label"
+      >
+        RPS
+      </span>
+      <span
+        class="stress-card__value"
+      >
+        88.4
+      </span>
+    </div>
+    <div
+      class="stress-card"
+    >
+      <span
+        class="stress-card__label"
+      >
+        P95 (MS)
+      </span>
+      <span
+        class="stress-card__value"
+      >
+        103.3
+      </span>
+    </div>
+    <div
+      class="stress-card"
+    >
+      <span
+        class="stress-card__label"
+      >
+        ERROR %
+      </span>
+      <span
+        class="stress-card__value"
+      >
+        0.39%
+      </span>
+    </div>
+    <div
+      class="stress-card"
+    >
+      <span
+        class="stress-card__label"
+      >
+        VUS
+      </span>
+      <span
+        class="stress-card__value"
+      >
+        35
+      </span>
+    </div>
+  </div>
+  <div
+    class="stress-summary"
+  >
+    <div
+      class="stress-summary__header"
+    >
+      <span>
+        FINAL SCORE
+      </span>
+      <strong>
+        84
+      </strong>
+    </div>
+    <ul
+      class="stress-summary__list"
+    >
+      <li>
+        Saturation stayed below threshold.
+      </li>
+      <li>
+        Run closed with healthy margins.
+      </li>
+      <li>
+        final throughput reached 88.4 RPS.
+      </li>
+    </ul>
+  </div>
+  <button
+    class="publish-btn stress-start-btn"
+    type="button"
+  >
+    Run Completed
+  </button>
+</div>
+`;
+
+exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
+<div
+  class="panel stress-panel"
+>
+  <div
+    class="stress-header"
+  >
+    <span
+      class="panel-title"
+    >
+      <span
+        class="slash"
+      >
+        ╱
+      </span>
+       Stress Lab
+    </span>
+    <span
+      class="stress-score stress-score--low"
+    >
+      0
+    </span>
+  </div>
+  <div
+    class="field-group"
+  >
+    <label
+      class="field-label"
+    >
+      Admin Key
+    </label>
+    <input
+      autocomplete="off"
+      placeholder="X-Admin-Key"
+      type="password"
+      value=""
+    />
+  </div>
+  <div
+    class="stress-run-meta"
+  >
+    <span>
+      RUN: 
+      --
+    </span>
+    <span>
+      STATUS: 
+      idle
+    </span>
+  </div>
+  <p
+    class="stress-phase stress-phase--idle"
+  >
+    PHASE: 
+    idle
+  </p>
+  <p
+    class="stress-flow-label"
+  >
+    created → queued → initializing → running → processing_metrics → completed
+  </p>
+  <div
+    class="stress-flow"
+  >
+    <span
+      class="stress-step"
+      title="created"
+    />
+    <span
+      class="stress-step"
+      title="queued"
+    />
+    <span
+      class="stress-step"
+      title="initializing"
+    />
+    <span
+      class="stress-step"
+      title="running"
+    />
+    <span
+      class="stress-step"
+      title="processing_metrics"
+    />
+    <span
+      class="stress-step"
+      title="completed"
+    />
+  </div>
+  <div
+    class="stress-wave-wrap"
+  >
+    <div
+      class="stress-wave-meta"
+    >
+      <span>
+        RPS WAVEFORM
+      </span>
+      <span>
+        WARMING UP
+      </span>
+    </div>
+    <div
+      class="stress-wave"
+    >
+      <svg
+        aria-label="RPS waveform"
+        preserveAspectRatio="none"
+        role="img"
+        viewBox="0 0 320 64"
+      >
+        <path
+          class="stress-wave-midline"
+          d="M 0 32 L 320 32"
+        />
+        <path
+          class="stress-wave-line"
+          d="M 6.0 58.0 L 314.0 58.0"
+        />
+      </svg>
+    </div>
+  </div>
+  <div
+    class="stress-beam"
+    style="--beam-duration: 1300ms; --beam-opacity: 0.16;"
+  >
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 0ms;"
+    />
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 70ms;"
+    />
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 140ms;"
+    />
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 210ms;"
+    />
+    <span
+      class="stress-beam__line"
+      style="--beam-delay: 280ms;"
+    />
+  </div>
+  <p
+    class="stress-runtime-insight"
+  >
+    Collecting runtime signal.
+  </p>
+  <div
+    class="stress-cards"
+  >
+    <div
+      class="stress-card"
+    >
+      <span
+        class="stress-card__label"
+      >
+        RPS
+      </span>
+      <span
+        class="stress-card__value"
+      >
+        0.0
+      </span>
+    </div>
+    <div
+      class="stress-card"
+    >
+      <span
+        class="stress-card__label"
+      >
+        P95 (MS)
+      </span>
+      <span
+        class="stress-card__value"
+      >
+        0.0
+      </span>
+    </div>
+    <div
+      class="stress-card"
+    >
+      <span
+        class="stress-card__label"
+      >
+        ERROR %
+      </span>
+      <span
+        class="stress-card__value"
+      >
+        0.00%
+      </span>
+    </div>
+    <div
+      class="stress-card"
+    >
+      <span
+        class="stress-card__label"
+      >
+        VUS
+      </span>
+      <span
+        class="stress-card__value"
+      >
+        0
+      </span>
+    </div>
+  </div>
+  <button
+    class="publish-btn stress-start-btn"
+    type="button"
+  >
+    Start Load Test
+  </button>
+</div>
+`;

@@ -3,6 +3,13 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.js',
+    css: true,
+    clearMocks: true,
+    restoreMocks: true,
+  },
   server: {
     proxy: {
       '/events': 'http://localhost:8080',
