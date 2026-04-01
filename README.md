@@ -6,6 +6,13 @@ Inspired by patterns from a distributed security auditing platform handling 12,0
 
 **Live demo:** [nexus.odieyang.com](https://nexus.odieyang.com)
 
+## Start Here
+
+New to Nexus or evaluating the dashboard for the first time?
+
+- English beginner guide: [doc/intro-en.md](doc/intro-en.md)
+- 中文入门说明: [doc/intro-zh.md](doc/intro-zh.md)
+
 ---
 
 ## Architecture
