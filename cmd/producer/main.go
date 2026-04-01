@@ -30,6 +30,12 @@ import (
 	nexusweb "nexus/web"
 )
 
+const (
+	defaultLoadtestRequestTimeout = 20 * time.Second
+	minLoadtestRequestTimeout     = 5 * time.Second
+	maxLoadtestRequestTimeout     = 30 * time.Second
+)
+
 func main() {
 	amqpURL := getenv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
 	pgDSN := getenv("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
@@ -482,9 +488,10 @@ func initLoadtestService() (*loadtest.Service, error) {
 		return nil, fmt.Errorf("LOADTEST_ADMIN_KEY must be set when loadtest is enabled")
 	}
 
-	timeout := time.Duration(getenvInt("LOADTEST_REQUEST_TIMEOUT_SECONDS", 20)) * time.Second
-	if timeout <= 0 {
-		timeout = 20 * time.Second
+	timeoutRaw := time.Duration(getenvInt("LOADTEST_REQUEST_TIMEOUT_SECONDS", int(defaultLoadtestRequestTimeout.Seconds()))) * time.Second
+	timeout := sanitizeLoadtestRequestTimeout(timeoutRaw)
+	if timeout != timeoutRaw {
+		slog.Warn("adjusted loadtest request timeout", "requested", timeoutRaw.String(), "effective", timeout.String())
 	}
 
 	client, err := loadtest.NewClient(loadtest.ClientConfig{
@@ -655,6 +662,19 @@ func defaultPortForScheme(scheme string) string {
 	default:
 		return ""
 	}
+}
+
+func sanitizeLoadtestRequestTimeout(requested time.Duration) time.Duration {
+	if requested <= 0 {
+		return defaultLoadtestRequestTimeout
+	}
+	if requested < minLoadtestRequestTimeout {
+		return minLoadtestRequestTimeout
+	}
+	if requested > maxLoadtestRequestTimeout {
+		return maxLoadtestRequestTimeout
+	}
+	return requested
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {

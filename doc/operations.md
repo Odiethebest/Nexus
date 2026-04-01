@@ -111,7 +111,7 @@ Configured in:
 
 Set the same environment variables as listed in the [development guide](development.md#environment-variables) as Railway service variables.
 
-For one-click loadtest (producer service), also set:
+For one-click loadtest, set these on the **producer service only**:
 
 | Variable | Required | Notes |
 |----------|----------|-------|
@@ -121,7 +121,7 @@ For one-click loadtest (producer service), also set:
 | `LOADTEST_MIN_START_INTERVAL_SECONDS` | yes | Suggested `10` per actor throttle |
 | `LOADTEST_MAX_PARALLEL` | yes | Suggested `1` |
 | `LOADTEST_POLL_INTERVAL_SECONDS` | yes | Suggested `3` |
-| `LOADTEST_REQUEST_TIMEOUT_SECONDS` | yes | Suggested `20` |
+| `LOADTEST_REQUEST_TIMEOUT_SECONDS` | yes | Suggested `20`; runtime clamps to `5-30` seconds |
 | `LOADTEST_UPSTREAM_RETRY_MAX` | yes | Suggested `2` |
 | `LOADTEST_UPSTREAM_RETRY_BASE_MS` | yes | Suggested `250` |
 | `LOADTEST_UPSTREAM_RETRY_MAX_MS` | yes | Suggested `2000` |
@@ -131,8 +131,23 @@ For one-click loadtest (producer service), also set:
 | `K6_API_TOKEN` | yes | Grafana Cloud k6 API token |
 | `K6_STACK_ID` | yes | Grafana stack ID for `X-Stack-Id` header |
 | `K6_LOAD_TEST_ID` | yes | Existing cloud load test ID |
-| `LOADTEST_ALLOWED_ORIGINS` | no | Comma-separated allow-list, optional |
+| `LOADTEST_ALLOWED_ORIGINS` | no | Comma-separated trusted origins for cross-origin HTTP + `/ws` (leave empty for same-origin only) |
 | `LOADTEST_BUDGET_VUH_PER_DAY` | no | Optional daily VUH cap |
+
+Do not set `K6_*` and `LOADTEST_*` variables on the worker service.
+
+### Railway Networking Check
+
+From the Railway producer shell, verify outbound connectivity to k6 API:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  --connect-timeout 5 \
+  --max-time 12 \
+  "${K6_API_BASE:-https://api.k6.io}"
+```
+
+Any HTTP status means egress/TLS is reachable. `000` means the request did not connect.
 
 ---
 
