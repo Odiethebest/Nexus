@@ -47,12 +47,12 @@ moving to the next.
 
 ---
 
-## Block 5 — Testing
+## Block 5 — Testing ✅
 > Depends on Blocks 2–3 (stable broker + real workers).
 
-- [ ] Unit test `internal/idempotency` (mock Redis with miniredis)
-- [ ] Unit test `internal/store` (use pgx test containers or sqlmock)
-- [ ] Integration test the full publish → worker → DB pipeline
+- [x] Unit test `internal/idempotency` (mock Redis with miniredis)
+- [x] Unit test `internal/store` (use pgx test containers or sqlmock)
+- [x] Integration test the full publish → worker → DB pipeline
       (spin up infra via `testcontainers-go`)
 
 ---
