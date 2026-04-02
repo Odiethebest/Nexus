@@ -160,7 +160,8 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 
-	if err := w.deliver(ctx, event, d.Body); err != nil {
+	delivered, err := w.deliver(ctx, event, d.Body)
+	if err != nil {
 		backoff := time.Duration(math.Pow(2, float64(deathCount+1))) * time.Second
 		slog.Error("webhook: delivery failed, requeuing",
 			"msg_id", event.MessageID, "attempt", deathCount+1, "backoff", backoff, "err", err)
@@ -169,13 +170,22 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 		d.Nack(false, true)
 		return
 	}
-	metrics.MessagesProcessed.WithLabelValues("webhook", "delivered").Inc()
 
+	if delivered {
+		metrics.MessagesProcessed.WithLabelValues("webhook", "delivered").Inc()
+	} else {
+		metrics.MessagesProcessed.WithLabelValues("webhook", "no_webhook").Inc()
+	}
+
+	status := "delivered"
+	if !delivered {
+		status = "skipped"
+	}
 	if err := w.store.SaveNotification(ctx, store.Notification{
 		MessageID: event.MessageID,
 		Channel:   "webhook",
 		EventType: event.Type,
-		Status:    "delivered",
+		Status:    status,
 		Payload:   d.Body,
 	}); err != nil {
 		slog.Error("webhook: persist failed", "err", err)
@@ -184,29 +194,32 @@ func (w *WebhookWorker) process(ctx context.Context, d amqp.Delivery) {
 	d.Ack(false)
 }
 
-func (w *WebhookWorker) deliver(ctx context.Context, event broker.Event, body []byte) error {
+// deliver POSTs the event body to the webhook URL in the payload.
+// Returns (true, nil) on success, (false, nil) when no webhook URL is configured,
+// or (false, err) on delivery failure.
+func (w *WebhookWorker) deliver(ctx context.Context, event broker.Event, body []byte) (bool, error) {
 	webhookURL, _ := event.Payload["webhook_url"].(string)
 	if webhookURL == "" {
-		return nil
+		return false, nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("webhook: create request: %w", err)
+		return false, fmt.Errorf("webhook: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Nexus-Message-ID", event.MessageID)
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("webhook: http request: %w", err)
+		return false, fmt.Errorf("webhook: http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("webhook: upstream returned %d", resp.StatusCode)
+		return false, fmt.Errorf("webhook: upstream returned %d", resp.StatusCode)
 	}
-	return nil
+	return true, nil
 }
 
 func xDeathCount(d amqp.Delivery) int {

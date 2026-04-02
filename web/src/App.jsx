@@ -1031,7 +1031,8 @@ export default function App() {
   const [notifications, setNotifications] = useState([])
   const [wsStatus, setWsStatus]           = useState('disconnected')
   const [initialising, setInitialising]   = useState(true)
-  const wsRef = useRef(null)
+  const wsRef          = useRef(null)
+  const reconnectTimer = useRef(null)
 
   useEffect(() => {
     function connect() {
@@ -1041,12 +1042,12 @@ export default function App() {
         ws = new WebSocket(`${protocol}://${location.host}/ws`)
       } catch {
         setWsStatus('disconnected')
-        setTimeout(connect, 3000)
+        reconnectTimer.current = setTimeout(connect, 3000)
         return
       }
       wsRef.current = ws
       ws.onopen    = () => setWsStatus('connected')
-      ws.onclose   = () => { setWsStatus('disconnected'); setTimeout(connect, 3000) }
+      ws.onclose   = () => { setWsStatus('disconnected'); reconnectTimer.current = setTimeout(connect, 3000) }
       ws.onerror   = () => setWsStatus('disconnected')
       ws.onmessage = e => {
         try {
@@ -1058,7 +1059,13 @@ export default function App() {
       }
     }
     connect()
-    return () => wsRef.current?.close()
+    return () => {
+      clearTimeout(reconnectTimer.current)
+      if (wsRef.current) {
+        wsRef.current.onclose = null
+        wsRef.current.close()
+      }
+    }
   }, [])
 
   useEffect(() => {
