@@ -98,21 +98,38 @@ body {
 /* ── Main grid ─────────────────────────────────────────────── */
 .dash {
   display: grid;
-  grid-template-columns: 1fr 1.6fr;
-  gap: 20px;
-  padding: 20px 28px 28px;
+  grid-template-columns: minmax(260px, 0.95fr) minmax(300px, 1.1fr) minmax(360px, 1.55fr);
+  gap: 14px;
+  padding: 14px 16px 16px;
   height: calc(100vh - 56px);
+  overflow: hidden;
 }
 
-@media (max-width: 720px) {
-  .dash { grid-template-columns: 1fr; height: auto; }
+@media (max-width: 1320px) {
+  .dash {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    height: auto;
+    min-height: calc(100vh - 56px);
+  }
+  .notif-panel {
+    grid-column: 1 / -1;
+    min-height: 300px;
+  }
 }
 
-.left-stack {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+@media (max-width: 860px) {
+  .dash {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+  .notif-panel {
+    grid-column: auto;
+    min-height: 420px;
+  }
 }
 
 /* ── Panel (L2 titles: 15px) ───────────────────────────────── */
@@ -125,14 +142,28 @@ body {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  padding: 24px;
+  padding: 18px;
   height: 100%;
+  min-height: 0;
 }
 
 /* Left panel: fields at top, button pinned to bottom */
 .publish-panel { justify-content: space-between; }
 .publish-fields { display: flex; flex-direction: column; gap: 18px; }
-.left-stack .panel { height: auto; }
+.publish-panel,
+.stress-panel {
+  overflow-y: auto;
+}
+
+.publish-panel::-webkit-scrollbar,
+.stress-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.publish-panel::-webkit-scrollbar-thumb,
+.stress-panel::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.35);
+}
 
 .panel-title {
   font-size: 15px;
@@ -255,7 +286,7 @@ select {
 
 /* ── Stress lab panel ──────────────────────────────────────── */
 .stress-panel {
-  gap: 14px;
+  gap: 12px;
   border-left-width: 4px;
   box-shadow:
     inset 0 0 40px rgba(245, 230, 66, 0.05),
@@ -350,12 +381,12 @@ select {
 }
 
 .stress-guidance {
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--accent-cyan);
   border: 1px solid rgba(0, 212, 255, 0.35);
   background: rgba(0, 212, 255, 0.08);
-  padding: 8px 10px;
+  padding: 6px 8px;
 }
 
 .stress-flow {
@@ -408,7 +439,7 @@ select {
 }
 
 .stress-wave {
-  height: 64px;
+  height: 56px;
   border: 1px solid rgba(0, 212, 255, 0.28);
   background:
     linear-gradient(180deg, rgba(0, 212, 255, 0.07), rgba(0, 212, 255, 0.02)),
@@ -518,7 +549,7 @@ select {
 .stress-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .stress-card {
@@ -581,7 +612,7 @@ select {
 .stress-summary {
   border: 1px solid rgba(245, 230, 66, 0.32);
   background: linear-gradient(180deg, rgba(245, 230, 66, 0.08), rgba(245, 230, 66, 0.03));
-  padding: 10px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -609,15 +640,15 @@ select {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .stress-summary__list li {
   border-left: 2px solid rgba(245, 230, 66, 0.38);
-  padding-left: 8px;
+  padding-left: 7px;
   color: #d4d4ca;
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 @keyframes summary-reveal {
@@ -818,15 +849,18 @@ select {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: 12px;
+  border: 1px dashed rgba(245, 230, 66, 0.3);
+  background: linear-gradient(180deg, rgba(245, 230, 66, 0.05), rgba(245, 230, 66, 0.01));
+  padding: 20px;
 }
 
 .empty-icon {
-  font-size: 28px;
+  font-size: 24px;
   color: var(--accent-yellow);
-  opacity: 0.2;
+  opacity: 0.28;
   letter-spacing: 0.1em;
 }
 
@@ -842,10 +876,38 @@ select {
   font-size: 12px;
   letter-spacing: 0.06em;
   color: var(--text-secondary);
-  opacity: 0.5;
-  text-align: center;
-  max-width: 240px;
+  opacity: 0.75;
+  text-align: left;
+  max-width: 460px;
   line-height: 1.6;
+}
+
+.empty-guide {
+  margin-top: 6px;
+  border: 1px solid rgba(0, 212, 255, 0.28);
+  background: rgba(0, 212, 255, 0.06);
+  padding: 10px 12px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.empty-guide__title {
+  display: block;
+  font-size: 11px;
+  color: var(--accent-cyan);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.empty-guide__list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #a9b8c1;
+  font-size: 12px;
 }
 
 /* ── Skeleton ──────────────────────────────────────────────── */

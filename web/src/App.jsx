@@ -853,6 +853,14 @@ function EmptyState() {
       <span className="empty-sub">
         No events detected. Publish one using the form to initiate transmission.
       </span>
+      <div className="empty-guide">
+        <span className="empty-guide__title">Quick Start</span>
+        <ul className="empty-guide__list">
+          <li>Pick a preset in Publish Event and press Publish.</li>
+          <li>Watch new cards appear here in real time.</li>
+          <li>Run Stress Lab to see throughput and latency signals.</li>
+        </ul>
+      </div>
     </div>
   )
 }
@@ -994,10 +1002,8 @@ export default function App() {
       </header>
 
       <main className="dash">
-        <div className="left-stack">
-          <PublishPanel onPublished={handlePublished} />
-          <StressLabPanel />
-        </div>
+        <PublishPanel onPublished={handlePublished} />
+        <StressLabPanel />
         <NotificationsPanel notifications={notifications} initialising={initialising} />
       </main>
     </>
