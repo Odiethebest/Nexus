@@ -144,13 +144,9 @@ func TestClient_GetTestRun_StatusDetailsFallbackToStatus(t *testing.T) {
 }
 
 func TestClient_QueryRangeK6_MergesAndSortsSeries(t *testing.T) {
-	var gotQuery string
-	var gotMetric string
-	var gotStep string
+	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.Query().Get("query")
-		gotMetric = r.URL.Query().Get("metric")
-		gotStep = r.URL.Query().Get("step")
+		gotPath = r.URL.EscapedPath()
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
@@ -194,8 +190,9 @@ func TestClient_QueryRangeK6_MergesAndSortsSeries(t *testing.T) {
 		t.Fatalf("query range: %v", err)
 	}
 
-	if gotMetric != "http_reqs" || gotQuery != "rate" || gotStep != "3" {
-		t.Fatalf("unexpected query params metric=%q query=%q step=%q", gotMetric, gotQuery, gotStep)
+	wantPath := "/cloud/v5/test_runs/93001/query_range_k6(metric=%27http_reqs%27,query=%27rate%27,step=3)"
+	if gotPath != wantPath {
+		t.Fatalf("unexpected request path: got %q want %q", gotPath, wantPath)
 	}
 
 	if len(points) != 3 {
@@ -213,7 +210,9 @@ func TestClient_QueryRangeK6_MergesAndSortsSeries(t *testing.T) {
 }
 
 func TestClient_QueryAggregateK6_UsesScalarAndMatrixValues(t *testing.T) {
+	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"status": "success",
@@ -248,6 +247,10 @@ func TestClient_QueryAggregateK6_UsesScalarAndMatrixValues(t *testing.T) {
 	got, err := client.QueryAggregateK6(context.Background(), 94001, "http_reqs", "sum(rate)")
 	if err != nil {
 		t.Fatalf("query aggregate: %v", err)
+	}
+	wantPath := "/cloud/v5/test_runs/94001/query_aggregate_k6(metric=%27http_reqs%27,query=%27sum%28rate%29%27)"
+	if gotPath != wantPath {
+		t.Fatalf("unexpected request path: got %q want %q", gotPath, wantPath)
 	}
 	if got != 17.5 {
 		t.Fatalf("expected aggregate 17.5, got %v", got)

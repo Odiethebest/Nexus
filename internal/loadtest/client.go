@@ -192,14 +192,13 @@ func (c *Client) QueryRangeK6(
 	stepSeconds int,
 ) ([]MetricPoint, error) {
 	path := fmt.Sprintf("/cloud/v5/test_runs/%d/query_range_k6", runID)
-	q := url.Values{}
-	q.Set("metric", metric)
-	q.Set("query", query)
-	if stepSeconds > 0 {
-		q.Set("step", strconv.Itoa(stepSeconds))
-	}
+	path = buildK6OperationPath(path, []k6OperationParam{
+		{key: "metric", value: metric, quoted: true},
+		{key: "query", value: query, quoted: true},
+		{key: "step", value: strconv.Itoa(stepSeconds), quoted: false, include: stepSeconds > 0},
+	})
 
-	raw, err := c.doJSON(ctx, http.MethodGet, path, q, nil)
+	raw, err := c.doJSON(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -244,11 +243,12 @@ func (c *Client) QueryAggregateK6(
 	query string,
 ) (float64, error) {
 	path := fmt.Sprintf("/cloud/v5/test_runs/%d/query_aggregate_k6", runID)
-	q := url.Values{}
-	q.Set("metric", metric)
-	q.Set("query", query)
+	path = buildK6OperationPath(path, []k6OperationParam{
+		{key: "metric", value: metric, quoted: true},
+		{key: "query", value: query, quoted: true},
+	})
 
-	raw, err := c.doJSON(ctx, http.MethodGet, path, q, nil)
+	raw, err := c.doJSON(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -519,6 +519,51 @@ func classifyUpstreamEndpoint(path string) string {
 	default:
 		return "other"
 	}
+}
+
+type k6OperationParam struct {
+	key     string
+	value   string
+	quoted  bool
+	include bool
+}
+
+func buildK6OperationPath(base string, params []k6OperationParam) string {
+	if len(params) == 0 {
+		return base
+	}
+
+	parts := make([]string, 0, len(params))
+	for _, param := range params {
+		if param.key == "" {
+			continue
+		}
+		if !param.include && param.value == "" {
+			continue
+		}
+		if !param.include && !param.quoted {
+			continue
+		}
+
+		value := param.value
+		if param.quoted {
+			value = quoteK6Param(value)
+			value = url.PathEscape(value)
+		}
+		parts = append(parts, param.key+"="+value)
+	}
+	if len(parts) == 0 {
+		return base
+	}
+	return base + "(" + strings.Join(parts, ",") + ")"
+}
+
+func quoteK6Param(v string) string {
+	replacer := strings.NewReplacer(
+		`\\`, `\\\\`,
+		`'`, `\\'`,
+	)
+	return "'" + replacer.Replace(v) + "'"
 }
 
 type testRunDTO struct {

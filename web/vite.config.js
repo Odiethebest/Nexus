@@ -14,6 +14,7 @@ export default defineConfig({
     proxy: {
       '/events': 'http://localhost:8080',
       '/notifications': 'http://localhost:8080',
+      '/ops': 'http://localhost:8080',
       '/ws': {
         target: 'ws://localhost:8080',
         ws: true,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -66,8 +67,9 @@ func TestService_StartSyncCooldownAndBudget(t *testing.T) {
 			return
 
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/cloud/v5/test_runs/") &&
-			strings.HasSuffix(r.URL.Path, "/query_range_k6"):
-			metric := r.URL.Query().Get("metric")
+			strings.Contains(r.URL.Path, "/query_range_k6("):
+			decodedPath, _ := url.PathUnescape(r.URL.EscapedPath())
+			metric := extractK6OperationParam(decodedPath, "metric")
 			switch metric {
 			case "http_reqs":
 				writeMatrix(t, w, [][]any{
@@ -186,6 +188,20 @@ func TestService_StartSyncCooldownAndBudget(t *testing.T) {
 	if got := atomic.LoadInt32(&startCalls); got != 2 {
 		t.Fatalf("expected exactly 2 upstream start calls, got %d", got)
 	}
+}
+
+func extractK6OperationParam(path string, key string) string {
+	anchor := key + "='"
+	start := strings.Index(path, anchor)
+	if start < 0 {
+		return ""
+	}
+	start += len(anchor)
+	end := strings.Index(path[start:], "'")
+	if end < 0 {
+		return ""
+	}
+	return strings.ReplaceAll(path[start:start+end], `\'`, `'`)
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
