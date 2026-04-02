@@ -21,6 +21,28 @@ func TestParseAllowedOriginsNormalizesAndSkipsInvalid(t *testing.T) {
 	}
 }
 
+func TestParseAllowedOrigins_AllowAllWhenEmpty(t *testing.T) {
+	allowed := parseAllowedOrigins("")
+
+	if len(allowed) != 1 {
+		t.Fatalf("expected only wildcard marker, got %d entries", len(allowed))
+	}
+	if _, ok := allowed[corsAllowAllMarker]; !ok {
+		t.Fatalf("expected wildcard allow-all marker for empty config")
+	}
+}
+
+func TestParseAllowedOrigins_AllowAllMarker(t *testing.T) {
+	allowed := parseAllowedOrigins("*, https://app.example.com")
+
+	if _, ok := allowed[corsAllowAllMarker]; !ok {
+		t.Fatalf("expected wildcard allow-all marker to be present")
+	}
+	if _, ok := allowed["https://app.example.com:443"]; !ok {
+		t.Fatalf("expected explicit trusted origin to remain present")
+	}
+}
+
 func TestIsRequestOriginAllowedSameOrigin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/health", nil)
 	req.Host = "api.example.com"
@@ -54,6 +76,22 @@ func TestIsRequestOriginAllowedAllowList(t *testing.T) {
 	req.Header.Set("Origin", "https://evil.example.com")
 	if isRequestOriginAllowed(req, allowed) {
 		t.Fatalf("expected untrusted cross-origin request to be denied")
+	}
+}
+
+func TestIsRequestOriginAllowedAllowAll(t *testing.T) {
+	for _, raw := range []string{"*", ""} {
+		t.Run("raw="+raw, func(t *testing.T) {
+			allowed := parseAllowedOrigins(raw)
+
+			req := httptest.NewRequest(http.MethodGet, "http://api.example.com/ops/loadtest/latest", nil)
+			req.Host = "api.example.com"
+			req.Header.Set("Origin", "https://anywhere.example.com")
+
+			if !isRequestOriginAllowed(req, allowed) {
+				t.Fatalf("expected wildcard allow-all to trust any origin")
+			}
+		})
 	}
 }
 

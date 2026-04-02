@@ -34,6 +34,7 @@ const (
 	defaultLoadtestRequestTimeout = 20 * time.Second
 	minLoadtestRequestTimeout     = 5 * time.Second
 	maxLoadtestRequestTimeout     = 30 * time.Second
+	corsAllowAllMarker            = "*"
 )
 
 func main() {
@@ -583,9 +584,21 @@ func withCORS(next http.Handler, allowedOrigins map[string]struct{}) http.Handle
 
 func parseAllowedOrigins(raw string) map[string]struct{} {
 	allowed := make(map[string]struct{})
+	if strings.TrimSpace(raw) == "" {
+		// Zero-config demo mode: if no explicit allow-list is configured,
+		// trust all origins. Set LOADTEST_ALLOWED_ORIGINS to a comma-separated
+		// list in stricter environments.
+		allowed[corsAllowAllMarker] = struct{}{}
+		return allowed
+	}
+
 	for _, token := range strings.Split(raw, ",") {
 		origin := strings.TrimSpace(token)
 		if origin == "" {
+			continue
+		}
+		if origin == corsAllowAllMarker {
+			allowed[corsAllowAllMarker] = struct{}{}
 			continue
 		}
 		key, _, _, _, ok := normalizeOrigin(origin)
@@ -601,6 +614,9 @@ func parseAllowedOrigins(raw string) map[string]struct{} {
 func isRequestOriginAllowed(r *http.Request, allowedOrigins map[string]struct{}) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
+		return true
+	}
+	if _, ok := allowedOrigins[corsAllowAllMarker]; ok {
 		return true
 	}
 

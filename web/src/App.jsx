@@ -337,7 +337,7 @@ function buildFinalInsights({ signals, snapshotInsight, snapshot, warnings, runS
 function retryHint(error) {
   const msg = String(error ?? '').toLowerCase()
   if (msg.includes('origin not allowed')) {
-    return 'Origin is blocked. If you use Vite dev server, add http://localhost:5173 to LOADTEST_ALLOWED_ORIGINS and restart producer.'
+    return 'Origin is blocked. Set LOADTEST_ALLOWED_ORIGINS (comma list) or use LOADTEST_ALLOWED_ORIGINS=* for quick demos, then restart producer.'
   }
   if (msg.includes('upstream')) {
     return 'Upstream load test provider failed. Wait 20 to 30 seconds, then press Start Load Test again.'
