@@ -103,7 +103,7 @@ func TestMapLoadtestError_StatusAndMessage(t *testing.T) {
 func TestHandleLoadtestStart_StatusBehavior(t *testing.T) {
 	t.Run("service unavailable when nil", func(t *testing.T) {
 		var latest atomic.Int64
-		handler := handleLoadtestStart(nil, &latest)
+		handler := handleLoadtestStart(nil, nil, &latest)
 		req := httptest.NewRequest(http.MethodPost, "/ops/loadtest/start", strings.NewReader(`{}`))
 		rec := httptest.NewRecorder()
 
@@ -136,7 +136,7 @@ func TestHandleLoadtestStart_StatusBehavior(t *testing.T) {
 		)
 
 		var latest atomic.Int64
-		handler := handleLoadtestStart(svc, &latest)
+		handler := handleLoadtestStart(svc, nil, &latest)
 		req := httptest.NewRequest(http.MethodPost, "/ops/loadtest/start", strings.NewReader(`{}`))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -180,7 +180,7 @@ func TestHandleLoadtestStart_StatusBehavior(t *testing.T) {
 		)
 
 		var latest atomic.Int64
-		handler := handleLoadtestStart(svc, &latest)
+		handler := handleLoadtestStart(svc, nil, &latest)
 
 		req1 := httptest.NewRequest(http.MethodPost, "/ops/loadtest/start", strings.NewReader(`{}`))
 		req1.Header.Set("X-Admin-Key", "secret")
@@ -202,7 +202,7 @@ func TestHandleLoadtestStart_StatusBehavior(t *testing.T) {
 
 func TestHandleLoadtestStatus_StatusBehavior(t *testing.T) {
 	t.Run("service unavailable when nil", func(t *testing.T) {
-		handler := handleLoadtestStatus(nil)
+		handler := handleLoadtestStatus(nil, nil)
 		req := httptest.NewRequest(http.MethodGet, "/ops/loadtest/1", nil)
 		req.SetPathValue("run_id", "1")
 		rec := httptest.NewRecorder()
@@ -235,7 +235,7 @@ func TestHandleLoadtestStatus_StatusBehavior(t *testing.T) {
 			loadtest.NewGuard(loadtest.GuardConfig{}),
 		)
 
-		handler := handleLoadtestStatus(svc)
+		handler := handleLoadtestStatus(svc, nil)
 		req := httptest.NewRequest(http.MethodGet, "/ops/loadtest/not-a-number", nil)
 		req.SetPathValue("run_id", "not-a-number")
 		rec := httptest.NewRecorder()
@@ -269,7 +269,7 @@ func TestHandleLoadtestStatus_StatusBehavior(t *testing.T) {
 			loadtest.NewGuard(loadtest.GuardConfig{}),
 		)
 
-		handler := handleLoadtestStatus(svc)
+		handler := handleLoadtestStatus(svc, nil)
 		req := httptest.NewRequest(http.MethodGet, "/ops/loadtest/9001", nil)
 		req.SetPathValue("run_id", "9001")
 		rec := httptest.NewRecorder()
@@ -303,7 +303,7 @@ func TestHandleLoadtestStatus_StatusBehavior(t *testing.T) {
 			loadtest.NewGuard(loadtest.GuardConfig{}),
 		)
 
-		handler := handleLoadtestStatus(svc)
+		handler := handleLoadtestStatus(svc, nil)
 		req := httptest.NewRequest(http.MethodGet, "/ops/loadtest/9002", nil)
 		req.SetPathValue("run_id", "9002")
 		rec := httptest.NewRecorder()

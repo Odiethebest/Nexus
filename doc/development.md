@@ -57,6 +57,7 @@ Both binaries read configuration from environment variables. Copy `.env.example`
 | `LOADTEST_MAX_PARALLEL` | `1` | Maximum concurrent loadtest runs |
 | `LOADTEST_POLL_INTERVAL_SECONDS` | `2` | Poll interval for loadtest status/metrics |
 | `LOADTEST_MAX_RUN_SECONDS` | `55` | Max run duration before server forces abort (demo responsiveness) |
+| `LOADTEST_DEMO_RUN_SECONDS` | `55` | Synthetic demo run duration for `mode=demo` |
 | `LOADTEST_STATUS_TIMEOUT_SECONDS` | `4` | Timeout for upstream run status calls |
 | `LOADTEST_QUERY_TIMEOUT_SECONDS` | `3` | Timeout for each upstream metrics query |
 | `LOADTEST_REQUEST_TIMEOUT_SECONDS` | `20` | Upstream k6 API timeout per request (clamped to 5-30 seconds) |
@@ -196,7 +197,8 @@ When `LOADTEST_ENABLED=true`, producer exposes:
 | `/ops/loadtest/latest` | `GET` | Fetch the latest recorded run |
 
 Notes:
-- `X-Admin-Key` is entered by the operator in the dashboard and sent only for start requests.
+- `POST /ops/loadtest/start` accepts `mode` in body: `demo` (synthetic, deterministic) or `real` (Grafana Cloud k6).
+- `X-Admin-Key` is required only when `mode=real`; demo mode does not require cloud credentials.
 - The dashboard no longer persists this key in browser storage between page reloads.
 
 ---

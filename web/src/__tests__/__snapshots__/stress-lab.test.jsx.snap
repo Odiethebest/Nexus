@@ -29,6 +29,36 @@ exports[`StressLabPanel snapshots > matches completed state snapshot 1`] = `
     <label
       class="field-label"
     >
+      Run Mode
+    </label>
+    <div
+      class="stress-mode-switch"
+    >
+      <button
+        class="stress-mode-btn stress-mode-btn--active"
+        type="button"
+      >
+        Demo Fast
+      </button>
+      <button
+        class="stress-mode-btn"
+        type="button"
+      >
+        Real Cloud
+      </button>
+    </div>
+    <p
+      class="field-help stress-key-help"
+    >
+      Demo Fast is deterministic and finishes in about 1 minute. Real Cloud depends on upstream queue and may take longer.
+    </p>
+  </div>
+  <div
+    class="field-group"
+  >
+    <label
+      class="field-label"
+    >
       Admin Key
     </label>
     <input
@@ -40,7 +70,7 @@ exports[`StressLabPanel snapshots > matches completed state snapshot 1`] = `
     <p
       class="field-help stress-key-help"
     >
-      Required for start requests. Key is not stored after page refresh.
+      Optional in Demo Fast mode; only needed when you switch to Real Cloud.
     </p>
   </div>
   <div
@@ -49,6 +79,10 @@ exports[`StressLabPanel snapshots > matches completed state snapshot 1`] = `
     <span>
       RUN: 
       52
+    </span>
+    <span>
+      MODE: 
+      demo
     </span>
     <span>
       STATUS: 
@@ -351,6 +385,36 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
     <label
       class="field-label"
     >
+      Run Mode
+    </label>
+    <div
+      class="stress-mode-switch"
+    >
+      <button
+        class="stress-mode-btn stress-mode-btn--active"
+        type="button"
+      >
+        Demo Fast
+      </button>
+      <button
+        class="stress-mode-btn"
+        type="button"
+      >
+        Real Cloud
+      </button>
+    </div>
+    <p
+      class="field-help stress-key-help"
+    >
+      Demo Fast is deterministic and finishes in about 1 minute. Real Cloud depends on upstream queue and may take longer.
+    </p>
+  </div>
+  <div
+    class="field-group"
+  >
+    <label
+      class="field-label"
+    >
       Admin Key
     </label>
     <input
@@ -362,7 +426,7 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
     <p
       class="field-help stress-key-help"
     >
-      Required for start requests. Key is not stored after page refresh.
+      Optional in Demo Fast mode; only needed when you switch to Real Cloud.
     </p>
   </div>
   <div
@@ -371,6 +435,10 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
     <span>
       RUN: 
       --
+    </span>
+    <span>
+      MODE: 
+      demo
     </span>
     <span>
       STATUS: 
@@ -386,7 +454,7 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
   <p
     class="stress-guidance"
   >
-    Paste the server-side admin key, then start the run.
+    Ready. Start Demo Fast for a deterministic walkthrough with direct visual feedback.
   </p>
   <p
     class="stress-flow-label"
@@ -582,10 +650,9 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
   </div>
   <button
     class="publish-btn stress-start-btn"
-    disabled=""
     type="button"
   >
-    Enter Admin Key
+    Start Load Test
   </button>
 </div>
 `;

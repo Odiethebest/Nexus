@@ -727,6 +727,35 @@ select {
   color: #9ea9b0;
 }
 
+.stress-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stress-mode-btn {
+  border: 1px solid rgba(138, 138, 128, 0.46);
+  background: rgba(138, 138, 128, 0.12);
+  color: var(--text-secondary);
+  height: 34px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.stress-mode-btn--active {
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  background: rgba(0, 212, 255, 0.14);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.22);
+}
+
+.stress-mode-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ── Priority badge ────────────────────────────────────────── */
 .priority-badge {
   display: inline-flex;

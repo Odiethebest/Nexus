@@ -38,6 +38,8 @@ const (
 	defaultLoadtestStatusTimeout  = 4 * time.Second
 	defaultLoadtestQueryTimeout   = 3 * time.Second
 	corsAllowAllMarker            = "*"
+	loadtestModeDemo              = "demo"
+	loadtestModeReal              = "real"
 )
 
 func main() {
@@ -87,6 +89,11 @@ func main() {
 		os.Exit(1)
 	}
 	loadtestEnabled := getenvBool("LOADTEST_ENABLED", false)
+	demoRunDuration := time.Duration(getenvInt("LOADTEST_DEMO_RUN_SECONDS", 55)) * time.Second
+	demoLoadtestSvc := loadtest.NewDemoService(loadtest.DemoServiceConfig{
+		PollInterval: time.Duration(getenvInt("LOADTEST_POLL_INTERVAL_SECONDS", 2)) * time.Second,
+		RunDuration:  demoRunDuration,
+	})
 	slog.Info("loadtest endpoints configured", "enabled", loadtestEnabled)
 	var latestLoadtestRun atomic.Int64
 
@@ -96,9 +103,9 @@ func main() {
 	mux.HandleFunc("GET /notifications", handleListNotifications(st))
 	mux.HandleFunc("POST /notifications/clear", handleClearNotifications(st))
 	mux.HandleFunc("POST /dlq/replay", handleReplay(replayer))
-	mux.HandleFunc("POST /ops/loadtest/start", handleLoadtestStart(loadtestSvc, &latestLoadtestRun))
-	mux.HandleFunc("GET /ops/loadtest/{run_id}", handleLoadtestStatus(loadtestSvc))
-	mux.HandleFunc("GET /ops/loadtest/latest", handleLoadtestLatest(loadtestSvc, &latestLoadtestRun))
+	mux.HandleFunc("POST /ops/loadtest/start", handleLoadtestStart(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
+	mux.HandleFunc("GET /ops/loadtest/{run_id}", handleLoadtestStatus(loadtestSvc, demoLoadtestSvc))
+	mux.HandleFunc("GET /ops/loadtest/latest", handleLoadtestLatest(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
 	mux.HandleFunc("GET /ws", wsHub.ServeWS)
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -164,12 +171,14 @@ type publishRequest struct {
 }
 
 type loadtestStartRequest struct {
+	Mode     string `json:"mode,omitempty"`
 	Scenario string `json:"scenario,omitempty"`
 	Preset   string `json:"preset,omitempty"`
 	Note     string `json:"note,omitempty"`
 }
 
 type loadtestStartResponse struct {
+	Mode             string             `json:"mode,omitempty"`
 	RunID            int64              `json:"run_id"`
 	TestID           int64              `json:"test_id"`
 	Status           loadtest.RunStatus `json:"status"`
@@ -178,6 +187,7 @@ type loadtestStartResponse struct {
 }
 
 type loadtestRunEnvelope struct {
+	Mode        string             `json:"mode,omitempty"`
 	Run         loadtestRunSummary `json:"run"`
 	Series      loadtestSeriesJSON `json:"series"`
 	Snapshot    any                `json:"snapshot"`
@@ -305,33 +315,49 @@ func handleReplay(r *replay.Replayer) http.HandlerFunc {
 	}
 }
 
-func handleLoadtestStart(svc *loadtest.Service, latest *atomic.Int64) http.HandlerFunc {
+func handleLoadtestStart(svc *loadtest.Service, demo *loadtest.DemoService, latest *atomic.Int64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if svc == nil {
-			writeJSONError(w, http.StatusServiceUnavailable, "loadtest service unavailable")
-			return
-		}
-
 		var req loadtestStartRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeJSONError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
 
-		started, err := svc.Start(
-			r.Context(),
-			r.Header.Get("X-Admin-Key"),
-			actorFromRequest(r),
-			loadtest.StartOptions{
-				Scenario: req.Scenario,
-				Preset:   req.Preset,
-				Note:     req.Note,
-			},
+		opts := loadtest.StartOptions{
+			Scenario: req.Scenario,
+			Preset:   req.Preset,
+			Note:     req.Note,
+		}
+		mode := normalizeLoadtestMode(req.Mode)
+
+		var (
+			started loadtest.StartResult
+			err     error
 		)
+
+		switch mode {
+		case loadtestModeDemo:
+			if demo == nil {
+				writeJSONError(w, http.StatusServiceUnavailable, "demo loadtest service unavailable")
+				return
+			}
+			started, err = demo.Start(r.Context(), opts)
+		default:
+			if svc == nil {
+				writeJSONError(w, http.StatusServiceUnavailable, "loadtest service unavailable")
+				return
+			}
+			started, err = svc.Start(
+				r.Context(),
+				r.Header.Get("X-Admin-Key"),
+				actorFromRequest(r),
+				opts,
+			)
+		}
 		if err != nil {
 			metrics.LoadtestStartTotal.WithLabelValues(classifyLoadtestStartOutcome(err)).Inc()
 			status, message := mapLoadtestError(err)
-			slog.Warn("loadtest start failed", "status", status, "err", err)
+			slog.Warn("loadtest start failed", "mode", mode, "status", status, "err", err)
 			writeJSONError(w, status, message)
 			return
 		}
@@ -345,6 +371,7 @@ func handleLoadtestStart(svc *loadtest.Service, latest *atomic.Int64) http.Handl
 		}
 
 		writeJSON(w, http.StatusAccepted, loadtestStartResponse{
+			Mode:             mode,
 			RunID:            started.RunID,
 			TestID:           started.TestID,
 			Status:           started.Status,
@@ -354,56 +381,73 @@ func handleLoadtestStart(svc *loadtest.Service, latest *atomic.Int64) http.Handl
 	}
 }
 
-func handleLoadtestStatus(svc *loadtest.Service) http.HandlerFunc {
+func handleLoadtestStatus(svc *loadtest.Service, demo *loadtest.DemoService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if svc == nil {
-			writeJSONError(w, http.StatusServiceUnavailable, "loadtest service unavailable")
-			return
-		}
-
 		runID, err := strconv.ParseInt(r.PathValue("run_id"), 10, 64)
 		if err != nil || runID <= 0 {
 			writeJSONError(w, http.StatusBadRequest, "invalid run_id")
 			return
 		}
 
-		insight, err := svc.SyncRun(r.Context(), runID)
+		mode := loadtestModeReal
+		var insight loadtest.RunInsight
+		if demo != nil && demo.HasRun(runID) {
+			mode = loadtestModeDemo
+			insight, err = demo.SyncRun(r.Context(), runID)
+		} else {
+			if svc == nil {
+				writeJSONError(w, http.StatusServiceUnavailable, "loadtest service unavailable")
+				return
+			}
+			insight, err = svc.SyncRun(r.Context(), runID)
+		}
 		if err != nil {
 			status, message := mapLoadtestError(err)
-			slog.Warn("loadtest status fetch failed", "run_id", runID, "status", status, "err", err)
+			slog.Warn("loadtest status fetch failed", "run_id", runID, "mode", mode, "status", status, "err", err)
 			writeJSONError(w, status, message)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, toLoadtestRunEnvelope(insight))
+		writeJSON(w, http.StatusOK, toLoadtestRunEnvelope(insight, mode))
 	}
 }
 
-func handleLoadtestLatest(svc *loadtest.Service, latest *atomic.Int64) http.HandlerFunc {
+func handleLoadtestLatest(svc *loadtest.Service, demo *loadtest.DemoService, latest *atomic.Int64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if svc == nil {
-			writeJSONError(w, http.StatusServiceUnavailable, "loadtest service unavailable")
-			return
-		}
 		runID := latest.Load()
 		if runID <= 0 {
 			writeJSONError(w, http.StatusNotFound, "no loadtest run recorded")
 			return
 		}
 
-		insight, err := svc.SyncRun(r.Context(), runID)
+		mode := loadtestModeReal
+		var (
+			insight loadtest.RunInsight
+			err     error
+		)
+		if demo != nil && demo.HasRun(runID) {
+			mode = loadtestModeDemo
+			insight, err = demo.SyncRun(r.Context(), runID)
+		} else {
+			if svc == nil {
+				writeJSONError(w, http.StatusServiceUnavailable, "loadtest service unavailable")
+				return
+			}
+			insight, err = svc.SyncRun(r.Context(), runID)
+		}
 		if err != nil {
 			status, message := mapLoadtestError(err)
-			slog.Warn("loadtest latest fetch failed", "run_id", runID, "status", status, "err", err)
+			slog.Warn("loadtest latest fetch failed", "run_id", runID, "mode", mode, "status", status, "err", err)
 			writeJSONError(w, status, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, toLoadtestRunEnvelope(insight))
+		writeJSON(w, http.StatusOK, toLoadtestRunEnvelope(insight, mode))
 	}
 }
 
-func toLoadtestRunEnvelope(in loadtest.RunInsight) loadtestRunEnvelope {
+func toLoadtestRunEnvelope(in loadtest.RunInsight, mode string) loadtestRunEnvelope {
 	return loadtestRunEnvelope{
+		Mode: mode,
 		Run: loadtestRunSummary{
 			ID:      in.Run.ID,
 			Status:  in.Run.Status,
@@ -484,6 +528,15 @@ func classifyLoadtestStartOutcome(err error) string {
 		return "deny"
 	default:
 		return "error"
+	}
+}
+
+func normalizeLoadtestMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case loadtestModeDemo:
+		return loadtestModeDemo
+	default:
+		return loadtestModeReal
 	}
 }
 

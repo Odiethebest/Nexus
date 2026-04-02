@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -73,9 +74,9 @@ func TestHandleLoadtestStart_ContractAndAuth(t *testing.T) {
 	)
 
 	var latest atomic.Int64
-	handler := handleLoadtestStart(svc, &latest)
+	handler := handleLoadtestStart(svc, nil, &latest)
 
-	req := httptest.NewRequest("POST", "/ops/loadtest/start", strings.NewReader(`{"scenario":"default","preset":"quick","note":"smoke"}`))
+	req := httptest.NewRequest("POST", "/ops/loadtest/start", strings.NewReader(`{"mode":"real","scenario":"default","preset":"quick","note":"smoke"}`))
 	req.Header.Set("X-Admin-Key", "secret")
 	req.RemoteAddr = "203.0.113.8:34567"
 	rec := httptest.NewRecorder()
@@ -95,6 +96,9 @@ func TestHandleLoadtestStart_ContractAndAuth(t *testing.T) {
 	if resp.Status != loadtest.StatusCreated {
 		t.Fatalf("unexpected status: %s", resp.Status)
 	}
+	if resp.Mode != loadtestModeReal {
+		t.Fatalf("unexpected mode: %q", resp.Mode)
+	}
 	if resp.PollAfterSeconds != 3 {
 		t.Fatalf("unexpected poll interval: %d", resp.PollAfterSeconds)
 	}
@@ -102,7 +106,7 @@ func TestHandleLoadtestStart_ContractAndAuth(t *testing.T) {
 		t.Fatalf("expected latest run 9001, got %d", got)
 	}
 
-	unauthReq := httptest.NewRequest("POST", "/ops/loadtest/start", strings.NewReader(`{}`))
+	unauthReq := httptest.NewRequest("POST", "/ops/loadtest/start", strings.NewReader(`{"mode":"real"}`))
 	unauthReq.Header.Set("X-Admin-Key", "wrong")
 	unauthRec := httptest.NewRecorder()
 	handler.ServeHTTP(unauthRec, unauthReq)
@@ -164,7 +168,7 @@ func TestHandleLoadtestStatus_ContractShape(t *testing.T) {
 		loadtest.NewGuard(loadtest.GuardConfig{}),
 	)
 
-	handler := handleLoadtestStatus(svc)
+	handler := handleLoadtestStatus(svc, nil)
 	req := httptest.NewRequest("GET", "/ops/loadtest/9001", nil)
 	req.SetPathValue("run_id", "9001")
 	rec := httptest.NewRecorder()
@@ -186,6 +190,9 @@ func TestHandleLoadtestStatus_ContractShape(t *testing.T) {
 	if run["status"] != string(loadtest.StatusRunning) {
 		t.Fatalf("unexpected run status: %#v", run["status"])
 	}
+	if payload["mode"] != loadtestModeReal {
+		t.Fatalf("unexpected mode: %#v", payload["mode"])
+	}
 
 	series, ok := payload["series"].(map[string]any)
 	if !ok {
@@ -205,5 +212,55 @@ func TestHandleLoadtestStatus_ContractShape(t *testing.T) {
 	}
 	if _, ok := payload["health_score"].(float64); !ok {
 		t.Fatalf("missing numeric health_score")
+	}
+}
+
+func TestHandleLoadtestStart_DemoMode_NoAdminKey(t *testing.T) {
+	now := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+	demo := loadtest.NewDemoService(loadtest.DemoServiceConfig{
+		PollInterval: 2 * time.Second,
+		RunDuration:  55 * time.Second,
+		Now:          func() time.Time { return now },
+	})
+
+	var latest atomic.Int64
+	startHandler := handleLoadtestStart(nil, demo, &latest)
+
+	startReq := httptest.NewRequest("POST", "/ops/loadtest/start", strings.NewReader(`{"mode":"demo","note":"walkthrough"}`))
+	startRec := httptest.NewRecorder()
+	startHandler.ServeHTTP(startRec, startReq)
+	if startRec.Code != 202 {
+		t.Fatalf("expected 202, got %d body=%s", startRec.Code, startRec.Body.String())
+	}
+
+	var startResp loadtestStartResponse
+	if err := json.Unmarshal(startRec.Body.Bytes(), &startResp); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if startResp.Mode != loadtestModeDemo {
+		t.Fatalf("unexpected mode: %q", startResp.Mode)
+	}
+	if startResp.RunID <= 0 {
+		t.Fatalf("expected positive demo run id, got %d", startResp.RunID)
+	}
+	if got := latest.Load(); got != startResp.RunID {
+		t.Fatalf("latest run mismatch: got %d want %d", got, startResp.RunID)
+	}
+
+	statusHandler := handleLoadtestStatus(nil, demo)
+	statusReq := httptest.NewRequest("GET", "/ops/loadtest/1", nil)
+	statusReq.SetPathValue("run_id", strconv.FormatInt(startResp.RunID, 10))
+	statusRec := httptest.NewRecorder()
+	statusHandler.ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
+	if payload["mode"] != loadtestModeDemo {
+		t.Fatalf("unexpected status mode: %#v", payload["mode"])
 	}
 }

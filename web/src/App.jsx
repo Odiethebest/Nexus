@@ -72,6 +72,10 @@ const EVENT_PRESETS = [
 const EVENT_TYPE_OPTIONS = Array.from(new Set(EVENT_PRESETS.map(item => item.type))).sort()
 const LOADTEST_FLOW = ['created', 'queued', 'initializing', 'running', 'processing_metrics', 'completed']
 const LOADTEST_DEMO_TARGET_SECONDS = 60
+const LOADTEST_MODE = Object.freeze({
+  DEMO: 'demo',
+  REAL: 'real',
+})
 const LOADTEST_PHASE = Object.freeze({
   IDLE: 'idle',
   STARTING: 'starting',
@@ -337,8 +341,11 @@ function buildFinalInsights({ signals, snapshotInsight, snapshot, warnings, runS
   return lines.slice(0, 3)
 }
 
-function retryHint(error) {
+function retryHint(error, mode) {
   const msg = String(error ?? '').toLowerCase()
+  if (mode === LOADTEST_MODE.REAL && msg.includes('loadtest is disabled')) {
+    return 'Real Cloud Mode is disabled on server. Switch to Demo Fast Mode or enable LOADTEST_ENABLED.'
+  }
   if (msg.includes('origin not allowed')) {
     return 'Origin is blocked. Set LOADTEST_ALLOWED_ORIGINS (comma list) or use LOADTEST_ALLOWED_ORIGINS=* for quick demos, then restart producer.'
   }
@@ -602,6 +609,8 @@ function PublishPanel({ onPublished }) {
 // ── StressLabPanel ───────────────────────────────────────────
 export function StressLabPanel() {
   const [adminKey, setAdminKey] = useState('')
+  const [startMode, setStartMode] = useState(LOADTEST_MODE.DEMO)
+  const [activeRunMode, setActiveRunMode] = useState(LOADTEST_MODE.DEMO)
   const [runId, setRunId] = useState(null)
   const [runStatus, setRunStatus] = useState('idle')
   const [phase, setPhase] = useState(LOADTEST_PHASE.IDLE)
@@ -682,6 +691,7 @@ export function StressLabPanel() {
       const data = await res.json()
 
       const nextStatus = data?.run?.status || 'running'
+      const nextMode = data?.mode === LOADTEST_MODE.REAL ? LOADTEST_MODE.REAL : LOADTEST_MODE.DEMO
       const startedAt = toUnixMillis(data?.run?.created)
       if (startedAt > 0) {
         setRunStartedAtMs(startedAt)
@@ -696,6 +706,7 @@ export function StressLabPanel() {
       const nextPhase = phaseFromRunStatus(nextStatus)
 
       setRunStatus(nextStatus)
+      setActiveRunMode(nextMode)
       setPhase(nextPhase)
       setHealthScore(Number(data?.health_score ?? 0))
       setSnapshot(nextSnapshot)
@@ -734,13 +745,14 @@ export function StressLabPanel() {
   }
 
   async function handleStartLoadtest() {
-    if (!adminKey.trim()) {
+    if (startMode === LOADTEST_MODE.REAL && !adminKey.trim()) {
       setError('admin key is required before starting a load test')
       return
     }
 
     setError(null)
     setPhase(LOADTEST_PHASE.STARTING)
+    setActiveRunMode(startMode)
     setTempPollErrors(0)
     setCooldownSeconds(0)
     setPollAfterMs(DEFAULT_POLL_MS)
@@ -751,9 +763,10 @@ export function StressLabPanel() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
+          ...(startMode === LOADTEST_MODE.REAL && adminKey ? { 'X-Admin-Key': adminKey } : {}),
         },
         body: JSON.stringify({
+          mode: startMode,
           scenario: 'default',
           preset: 'quick',
           note: 'dashboard one-click run',
@@ -767,6 +780,7 @@ export function StressLabPanel() {
         throw new Error('loadtest start response missing run_id')
       }
       const initialStatus = data?.status || 'created'
+      const initialMode = data?.mode === LOADTEST_MODE.REAL ? LOADTEST_MODE.REAL : LOADTEST_MODE.DEMO
       const pollAfterSeconds = Number(data?.poll_after_seconds)
       const nextPollAfterMs = Number.isFinite(pollAfterSeconds) && pollAfterSeconds > 0
         ? Math.round(pollAfterSeconds * 1000)
@@ -775,6 +789,7 @@ export function StressLabPanel() {
       setPollAfterMs(nextPollAfterMs)
       setRunStartedAtMs(startedAt > 0 ? startedAt : Date.now())
       setRunId(nextRunId)
+      setActiveRunMode(initialMode)
       setRunStatus(initialStatus)
       setPhase(phaseFromRunStatus(initialStatus))
       setRpsSeries([])
@@ -823,7 +838,8 @@ export function StressLabPanel() {
   const statusStep = statusIndex(runStatus)
   const score = Number.isFinite(healthScore) ? Math.max(0, Math.min(100, Math.round(healthScore))) : 0
   const activePhase = isPollingPhase(phase)
-  const missingAdminKey = adminKey.trim().length === 0
+  const requiresAdminKey = startMode === LOADTEST_MODE.REAL
+  const missingAdminKey = requiresAdminKey && adminKey.trim().length === 0
   const startLocked = phase === LOADTEST_PHASE.STARTING || activePhase || cooldownSeconds > 0 || missingAdminKey
   const showFinalSummary = !!runId && (phase === LOADTEST_PHASE.COMPLETED || runStatus === 'aborted')
   const hasMetrics = (
@@ -849,14 +865,16 @@ export function StressLabPanel() {
   const backoffSeconds = (pollDelayMs / 1000).toFixed(1)
   const nextSyncCopy = activePhase ? `${nextPollSeconds.toFixed(1)}s` : '--'
   const cooldownCopy = cooldownSeconds > 0 ? `Try again in ${fmtCountdown(cooldownSeconds)}` : ''
+  const modeBadge = runId ? activeRunMode : startMode
   const noTrafficButBusy = activePhase &&
     snapshot.vus > 0 &&
     snapshot.rps === 0 &&
     snapshot.p95_ms === 0 &&
     snapshot.error_rate_pct === 0
+  const hintMode = runId ? activeRunMode : startMode
   const errorHint = cooldownCopy || (temporaryPollingIssue
     ? `Temporary sync issue. Auto retry in ${backoffSeconds}s.`
-    : retryHint(error))
+    : retryHint(error, hintMode))
   const demoProgress = Math.min(100, Math.round((elapsedSeconds / LOADTEST_DEMO_TARGET_SECONDS) * 100))
   const remainingToTarget = Math.max(0, LOADTEST_DEMO_TARGET_SECONDS - elapsedSeconds)
   const overDemoTarget = activePhase && elapsedSeconds >= LOADTEST_DEMO_TARGET_SECONDS
@@ -882,6 +900,31 @@ export function StressLabPanel() {
       </div>
 
       <div className="field-group">
+        <label className="field-label">Run Mode</label>
+        <div className="stress-mode-switch">
+          <button
+            type="button"
+            className={`stress-mode-btn${startMode === LOADTEST_MODE.DEMO ? ' stress-mode-btn--active' : ''}`}
+            onClick={() => setStartMode(LOADTEST_MODE.DEMO)}
+            disabled={activePhase || phase === LOADTEST_PHASE.STARTING}
+          >
+            Demo Fast
+          </button>
+          <button
+            type="button"
+            className={`stress-mode-btn${startMode === LOADTEST_MODE.REAL ? ' stress-mode-btn--active' : ''}`}
+            onClick={() => setStartMode(LOADTEST_MODE.REAL)}
+            disabled={activePhase || phase === LOADTEST_PHASE.STARTING}
+          >
+            Real Cloud
+          </button>
+        </div>
+        <p className="field-help stress-key-help">
+          Demo Fast is deterministic and finishes in about 1 minute. Real Cloud depends on upstream queue and may take longer.
+        </p>
+      </div>
+
+      <div className="field-group">
         <label className="field-label">Admin Key</label>
         <input
           type="password"
@@ -891,12 +934,15 @@ export function StressLabPanel() {
           autoComplete="off"
         />
         <p className="field-help stress-key-help">
-          Required for start requests. Key is not stored after page refresh.
+          {requiresAdminKey
+            ? 'Required for Real Cloud starts. Key is not stored after page refresh.'
+            : 'Optional in Demo Fast mode; only needed when you switch to Real Cloud.'}
         </p>
       </div>
 
       <div className="stress-run-meta">
         <span>RUN: {runId ?? '--'}</span>
+        <span>MODE: {modeBadge}</span>
         <span>STATUS: {runStatus}</span>
       </div>
       {runId && (
@@ -920,7 +966,11 @@ export function StressLabPanel() {
         <p className="stress-guidance">Paste the server-side admin key, then start the run.</p>
       )}
       {!missingAdminKey && phase === LOADTEST_PHASE.IDLE && !error && (
-        <p className="stress-guidance">Ready. Press Start Load Test to launch a cloud run.</p>
+        <p className="stress-guidance">
+          {startMode === LOADTEST_MODE.DEMO
+            ? 'Ready. Start Demo Fast for a deterministic walkthrough with direct visual feedback.'
+            : 'Ready. Start Real Cloud to run against Grafana k6 (duration depends on upstream scheduling).'}
+        </p>
       )}
       <p className="stress-flow-label">Run lifecycle</p>
       <div className="stress-flow">

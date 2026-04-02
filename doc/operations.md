@@ -122,6 +122,7 @@ For one-click loadtest, set these on the **producer service only**:
 | `LOADTEST_MAX_PARALLEL` | yes | Suggested `1` |
 | `LOADTEST_POLL_INTERVAL_SECONDS` | yes | Suggested `2` |
 | `LOADTEST_MAX_RUN_SECONDS` | yes | Suggested `55`; server forces abort when exceeded to keep demo flow responsive |
+| `LOADTEST_DEMO_RUN_SECONDS` | no | Suggested `55`; duration for synthetic `mode=demo` runs |
 | `LOADTEST_STATUS_TIMEOUT_SECONDS` | yes | Suggested `4`; timeout for upstream run status calls |
 | `LOADTEST_QUERY_TIMEOUT_SECONDS` | yes | Suggested `3`; timeout for each upstream metrics query |
 | `LOADTEST_REQUEST_TIMEOUT_SECONDS` | yes | Suggested `20`; runtime clamps to `5-30` seconds |
@@ -136,6 +137,10 @@ For one-click loadtest, set these on the **producer service only**:
 | `K6_LOAD_TEST_ID` | yes | Existing cloud load test ID |
 | `LOADTEST_ALLOWED_ORIGINS` | no | Comma-separated trusted origins for cross-origin HTTP + `/ws` (leave empty for same-origin only) |
 | `LOADTEST_BUDGET_VUH_PER_DAY` | no | Optional daily VUH cap |
+
+Demo-mode note:
+- `mode=demo` does not depend on Grafana Cloud queueing and can run even when `LOADTEST_ENABLED=false`.
+- `mode=real` requires `LOADTEST_ENABLED=true`, valid `K6_*` credentials, and `X-Admin-Key`.
 
 Do not set `K6_*` and `LOADTEST_*` variables on the worker service.
 
