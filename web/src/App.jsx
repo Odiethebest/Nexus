@@ -127,6 +127,84 @@ function payloadToText(payload) {
   return JSON.stringify(payload, null, 2)
 }
 
+function parseStoredPayload(raw) {
+  if (raw == null) return null
+  if (typeof raw === 'object') return raw
+  if (typeof raw !== 'string') return null
+
+  const text = raw.trim()
+  if (!text) return null
+
+  try {
+    return JSON.parse(text)
+  } catch {}
+
+  try {
+    if (typeof atob === 'function') {
+      const decoded = atob(text)
+      return JSON.parse(decoded)
+    }
+  } catch {}
+
+  return null
+}
+
+function coercePriority(value) {
+  const p = String(value ?? '').toLowerCase()
+  if (p === 'high' || p === 'normal' || p === 'low') return p
+  return 'normal'
+}
+
+function toEventTimestamp(value) {
+  const d = value ? new Date(value) : new Date()
+  if (!Number.isFinite(d.getTime())) return new Date()
+  return d
+}
+
+function normalizeStoredNotification(row) {
+  if (!row || typeof row !== 'object') return null
+
+  const parsed = parseStoredPayload(row.payload ?? row.Payload)
+  const messageId = parsed?.message_id ?? row.message_id ?? row.MessageID
+  if (!messageId) return null
+
+  return {
+    message_id: String(messageId),
+    type: String(parsed?.type ?? row.event_type ?? row.EventType ?? 'event'),
+    priority: coercePriority(parsed?.priority),
+    payload: parsed?.payload ?? parsed ?? row.payload ?? row.Payload ?? {},
+    timestamp: toEventTimestamp(parsed?.timestamp ?? row.created_at ?? row.CreatedAt),
+  }
+}
+
+function normalizeRealtimeEvent(value) {
+  if (!value || typeof value !== 'object') return null
+  const messageId = value.message_id ?? value.messageId
+  if (!messageId) return null
+
+  return {
+    message_id: String(messageId),
+    type: String(value.type ?? 'event'),
+    priority: coercePriority(value.priority),
+    payload: value.payload ?? {},
+    timestamp: toEventTimestamp(value.timestamp),
+  }
+}
+
+function sortAndMergeEvents(items) {
+  const byID = new Map()
+  for (const item of items) {
+    if (!item?.message_id) continue
+    const prev = byID.get(item.message_id)
+    if (!prev || item.timestamp > prev.timestamp) {
+      byID.set(item.message_id, item)
+    }
+  }
+  return [...byID.values()]
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 100)
+}
+
 async function readErrorMessage(res) {
   const fallback = `REQUEST FAILED (${res.status})`
   const raw = (await res.text()).trim()
@@ -698,6 +776,11 @@ export function StressLabPanel() {
   const temporaryPollingIssue = tempPollErrors > 0 && activePhase
   const backoffSeconds = (pollDelayMs / 1000).toFixed(1)
   const cooldownCopy = cooldownSeconds > 0 ? `Try again in ${fmtCountdown(cooldownSeconds)}` : ''
+  const noTrafficButBusy = activePhase &&
+    snapshot.vus > 0 &&
+    snapshot.rps === 0 &&
+    snapshot.p95_ms === 0 &&
+    snapshot.error_rate_pct === 0
   const errorHint = cooldownCopy || (temporaryPollingIssue
     ? `Temporary sync issue. Auto retry in ${backoffSeconds}s.`
     : retryHint(error))
@@ -831,6 +914,11 @@ export function StressLabPanel() {
       {error && <p className="form-error">// ERR: {error}</p>}
       {error && <p className="stress-hint">{errorHint}</p>}
       {!error && primaryWarning && <p className="stress-hint">{primaryWarning}</p>}
+      {!error && !primaryWarning && noTrafficButBusy && (
+        <p className="stress-hint">
+          VUs are active but no HTTP samples arrived. Check your Grafana k6 script and ensure it calls http.get/post to your target.
+        </p>
+      )}
 
       <button
         type="button"
@@ -946,11 +1034,6 @@ export default function App() {
   const wsRef = useRef(null)
 
   useEffect(() => {
-    const t = setTimeout(() => setInitialising(false), 600)
-    return () => clearTimeout(t)
-  }, [])
-
-  useEffect(() => {
     function connect() {
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
       let ws
@@ -967,12 +1050,10 @@ export default function App() {
       ws.onerror   = () => setWsStatus('disconnected')
       ws.onmessage = e => {
         try {
-          const ev = JSON.parse(e.data)
+          const ev = normalizeRealtimeEvent(JSON.parse(e.data))
+          if (!ev) return
           setInitialising(false)
-          setNotifications(prev => [
-            { ...ev, timestamp: ev.timestamp ? new Date(ev.timestamp) : new Date() },
-            ...prev.slice(0, 99),
-          ])
+          setNotifications(prev => sortAndMergeEvents([ev, ...prev]))
         } catch {}
       }
     }
@@ -980,9 +1061,40 @@ export default function App() {
     return () => wsRef.current?.close()
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+
+    async function pullStoredNotifications() {
+      try {
+        const res = await fetch('/notifications')
+        if (!res.ok) return
+        const rows = await res.json()
+        if (!Array.isArray(rows) || cancelled) return
+
+        const normalized = rows
+          .map(normalizeStoredNotification)
+          .filter(Boolean)
+
+        setNotifications(prev => sortAndMergeEvents([...normalized, ...prev]))
+      } catch {
+      } finally {
+        if (!cancelled) setInitialising(false)
+      }
+    }
+
+    pullStoredNotifications()
+    const timer = setInterval(pullStoredNotifications, 5000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [])
+
   function handlePublished(event) {
+    const normalized = normalizeRealtimeEvent(event)
+    if (!normalized) return
     setInitialising(false)
-    setNotifications(prev => [event, ...prev.slice(0, 99)])
+    setNotifications(prev => sortAndMergeEvents([normalized, ...prev]))
   }
 
   const connected = wsStatus === 'connected'
