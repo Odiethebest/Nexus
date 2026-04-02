@@ -83,6 +83,14 @@ const DEFAULT_POLL_MS = 3000
 const BACKOFF_POLL_MS = [5000, 6500, 8000]
 const P95_THRESHOLD_MS = 120
 const ERROR_SPIKE_PCT = 2
+const FLOW_LABEL = Object.freeze({
+  created: 'Created',
+  queued: 'Queued',
+  initializing: 'Init',
+  running: 'Running',
+  processing_metrics: 'Analyze',
+  completed: 'Done',
+})
 
 // Per-priority card styles (border-left width + bg + optional extra shadow)
 const CARD_STYLE = {
@@ -121,11 +129,11 @@ function payloadToText(payload) {
 
 async function readErrorMessage(res) {
   const fallback = `REQUEST FAILED (${res.status})`
-  const raw = await res.text()
+  const raw = (await res.text()).trim()
   if (!raw) return fallback
   try {
     const parsed = JSON.parse(raw)
-    return parsed?.error || raw
+    return String(parsed?.error || raw).trim()
   } catch {
     return raw
   }
@@ -250,6 +258,9 @@ function buildFinalInsights({ signals, snapshotInsight, snapshot, warnings, runS
 
 function retryHint(error) {
   const msg = String(error ?? '').toLowerCase()
+  if (msg.includes('origin not allowed')) {
+    return 'Origin is blocked. If you use Vite dev server, add http://localhost:5173 to LOADTEST_ALLOWED_ORIGINS and restart producer.'
+  }
   if (msg.includes('upstream')) {
     return 'Upstream load test provider failed. Wait 20 to 30 seconds, then press Start Load Test again.'
   }
@@ -259,7 +270,7 @@ function retryHint(error) {
   if (msg.includes('cooldown')) {
     return 'Cooldown is active. Retry after the cooldown window expires.'
   }
-  if (msg.includes('unauthorized')) {
+  if (msg.includes('unauthorized') || msg.includes('forbidden')) {
     return 'Admin Key is invalid. Update the key and retry.'
   }
   return 'Retry once. If it still fails, check producer logs and LOADTEST environment variables.'
@@ -595,6 +606,11 @@ export function StressLabPanel() {
   }
 
   async function handleStartLoadtest() {
+    if (!adminKey.trim()) {
+      setError('admin key is required before starting a load test')
+      return
+    }
+
     setError(null)
     setPhase(LOADTEST_PHASE.STARTING)
     setTempPollErrors(0)
@@ -657,7 +673,8 @@ export function StressLabPanel() {
   const statusStep = statusIndex(runStatus)
   const score = Number.isFinite(healthScore) ? Math.max(0, Math.min(100, Math.round(healthScore))) : 0
   const activePhase = isPollingPhase(phase)
-  const startLocked = phase === LOADTEST_PHASE.STARTING || activePhase || cooldownSeconds > 0
+  const missingAdminKey = adminKey.trim().length === 0
+  const startLocked = phase === LOADTEST_PHASE.STARTING || activePhase || cooldownSeconds > 0 || missingAdminKey
   const showFinalSummary = !!runId && (phase === LOADTEST_PHASE.COMPLETED || runStatus === 'aborted')
   const hasMetrics = (
     rpsSeries.length > 0 ||
@@ -686,7 +703,9 @@ export function StressLabPanel() {
     : retryHint(error))
 
   let startBtnLabel = 'Start Load Test'
-  if (phase === LOADTEST_PHASE.STARTING || phase === LOADTEST_PHASE.RUNNING || phase === LOADTEST_PHASE.ANALYZING) {
+  if (missingAdminKey && !activePhase && cooldownSeconds <= 0) {
+    startBtnLabel = 'Enter Admin Key'
+  } else if (phase === LOADTEST_PHASE.STARTING || phase === LOADTEST_PHASE.RUNNING || phase === LOADTEST_PHASE.ANALYZING) {
     startBtnLabel = 'Load Test Running'
   } else if (phase === LOADTEST_PHASE.COMPLETED) {
     startBtnLabel = 'Run Completed'
@@ -712,6 +731,9 @@ export function StressLabPanel() {
           placeholder="X-Admin-Key"
           autoComplete="off"
         />
+        <p className="field-help stress-key-help">
+          Required for start requests. Key is not stored after page refresh.
+        </p>
       </div>
 
       <div className="stress-run-meta">
@@ -719,14 +741,22 @@ export function StressLabPanel() {
         <span>STATUS: {runStatus}</span>
       </div>
       <p className={`stress-phase ${phaseClass(phase)}`}>PHASE: {phase}</p>
-      <p className="stress-flow-label">created → queued → initializing → running → processing_metrics → completed</p>
+      {missingAdminKey && !activePhase && cooldownSeconds <= 0 && !error && (
+        <p className="stress-guidance">Paste the server-side admin key, then start the run.</p>
+      )}
+      {!missingAdminKey && phase === LOADTEST_PHASE.IDLE && !error && (
+        <p className="stress-guidance">Ready. Press Start Load Test to launch a cloud run.</p>
+      )}
+      <p className="stress-flow-label">Run lifecycle</p>
       <div className="stress-flow">
         {LOADTEST_FLOW.map((step, i) => (
           <span
             key={step}
             className={`stress-step${i <= statusStep ? ' stress-step--active' : ''}`}
             title={step}
-          />
+          >
+            <span className="stress-step__name">{FLOW_LABEL[step] ?? step}</span>
+          </span>
         ))}
       </div>
 

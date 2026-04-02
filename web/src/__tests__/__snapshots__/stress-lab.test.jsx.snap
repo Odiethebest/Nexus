@@ -35,8 +35,13 @@ exports[`StressLabPanel snapshots > matches completed state snapshot 1`] = `
       autocomplete="off"
       placeholder="X-Admin-Key"
       type="password"
-      value=""
+      value="secret-key"
     />
+    <p
+      class="field-help stress-key-help"
+    >
+      Required for start requests. Key is not stored after page refresh.
+    </p>
   </div>
   <div
     class="stress-run-meta"
@@ -59,7 +64,7 @@ exports[`StressLabPanel snapshots > matches completed state snapshot 1`] = `
   <p
     class="stress-flow-label"
   >
-    created → queued → initializing → running → processing_metrics → completed
+    Run lifecycle
   </p>
   <div
     class="stress-flow"
@@ -67,27 +72,63 @@ exports[`StressLabPanel snapshots > matches completed state snapshot 1`] = `
     <span
       class="stress-step stress-step--active"
       title="created"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Created
+      </span>
+    </span>
     <span
       class="stress-step stress-step--active"
       title="queued"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Queued
+      </span>
+    </span>
     <span
       class="stress-step stress-step--active"
       title="initializing"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Init
+      </span>
+    </span>
     <span
       class="stress-step stress-step--active"
       title="running"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Running
+      </span>
+    </span>
     <span
       class="stress-step stress-step--active"
       title="processing_metrics"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Analyze
+      </span>
+    </span>
     <span
       class="stress-step stress-step--active"
       title="completed"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Done
+      </span>
+    </span>
   </div>
   <div
     class="stress-wave-wrap"
@@ -285,6 +326,11 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
       type="password"
       value=""
     />
+    <p
+      class="field-help stress-key-help"
+    >
+      Required for start requests. Key is not stored after page refresh.
+    </p>
   </div>
   <div
     class="stress-run-meta"
@@ -305,9 +351,14 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
     idle
   </p>
   <p
+    class="stress-guidance"
+  >
+    Paste the server-side admin key, then start the run.
+  </p>
+  <p
     class="stress-flow-label"
   >
-    created → queued → initializing → running → processing_metrics → completed
+    Run lifecycle
   </p>
   <div
     class="stress-flow"
@@ -315,27 +366,63 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
     <span
       class="stress-step"
       title="created"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Created
+      </span>
+    </span>
     <span
       class="stress-step"
       title="queued"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Queued
+      </span>
+    </span>
     <span
       class="stress-step"
       title="initializing"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Init
+      </span>
+    </span>
     <span
       class="stress-step"
       title="running"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Running
+      </span>
+    </span>
     <span
       class="stress-step"
       title="processing_metrics"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Analyze
+      </span>
+    </span>
     <span
       class="stress-step"
       title="completed"
-    />
+    >
+      <span
+        class="stress-step__name"
+      >
+        Done
+      </span>
+    </span>
   </div>
   <div
     class="stress-wave-wrap"
@@ -462,9 +549,10 @@ exports[`StressLabPanel snapshots > matches idle state snapshot 1`] = `
   </div>
   <button
     class="publish-btn stress-start-btn"
+    disabled=""
     type="button"
   >
-    Start Load Test
+    Enter Admin Key
   </button>
 </div>
 `;

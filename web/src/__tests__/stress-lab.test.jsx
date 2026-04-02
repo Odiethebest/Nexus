@@ -9,6 +9,10 @@ function jsonResponse(body, status = 200) {
   })
 }
 
+function enterAdminKey(value = 'secret-key') {
+  fireEvent.change(screen.getByPlaceholderText(/x-admin-key/i), { target: { value } })
+}
+
 describe('StressLabPanel state machine', () => {
   it('transitions idle -> running after start and initial sync', async () => {
     const fetchMock = vi.fn()
@@ -30,6 +34,7 @@ describe('StressLabPanel state machine', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<StressLabPanel />)
+    enterAdminKey()
 
     fireEvent.click(screen.getByRole('button', { name: /start load test/i }))
 
@@ -63,6 +68,7 @@ describe('StressLabPanel state machine', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<StressLabPanel />)
+    enterAdminKey()
 
     fireEvent.click(screen.getByRole('button', { name: /start load test/i }))
 
@@ -94,6 +100,7 @@ describe('StressLabPanel API contract parsing', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { container } = render(<StressLabPanel />)
+    enterAdminKey()
 
     fireEvent.click(screen.getByRole('button', { name: /start load test/i }))
 
@@ -115,6 +122,7 @@ describe('StressLabPanel API contract parsing', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<StressLabPanel />)
+    enterAdminKey()
 
     fireEvent.click(screen.getByRole('button', { name: /start load test/i }))
 
@@ -150,6 +158,7 @@ describe('StressLabPanel snapshots', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { container } = render(<StressLabPanel />)
+    enterAdminKey()
 
     fireEvent.click(screen.getByRole('button', { name: /start load test/i }))
     await screen.findByText('STATUS: completed')
