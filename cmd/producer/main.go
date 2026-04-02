@@ -84,6 +84,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /events", handlePublish(pub))
 	mux.HandleFunc("GET /notifications", handleListNotifications(st))
+	mux.HandleFunc("POST /notifications/clear", handleClearNotifications(st))
 	mux.HandleFunc("POST /dlq/replay", handleReplay(replayer))
 	mux.HandleFunc("POST /ops/loadtest/start", handleLoadtestStart(loadtestSvc, &latestLoadtestRun))
 	mux.HandleFunc("GET /ops/loadtest/{run_id}", handleLoadtestStatus(loadtestSvc))
@@ -225,6 +226,42 @@ func handleListNotifications(st *store.Store) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(notifications)
+	}
+}
+
+func handleClearNotifications(st *store.Store) http.HandlerFunc {
+	type clearRequest struct {
+		BeforeUnixMS int64 `json:"before_unix_ms"`
+	}
+
+	type clearResponse struct {
+		Cleared      int64 `json:"cleared"`
+		BeforeUnixMS int64 `json:"before_unix_ms"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req clearRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		cutoff := time.Now().UTC()
+		if req.BeforeUnixMS > 0 {
+			cutoff = time.UnixMilli(req.BeforeUnixMS).UTC()
+		}
+
+		cleared, err := st.ClearNotificationsBefore(r.Context(), cutoff)
+		if err != nil {
+			slog.Error("clear notifications failed", "before_unix_ms", cutoff.UnixMilli(), "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, clearResponse{
+			Cleared:      cleared,
+			BeforeUnixMS: cutoff.UnixMilli(),
+		})
 	}
 }
 

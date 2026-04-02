@@ -97,3 +97,21 @@ func (s *Store) ListNotifications(ctx context.Context, limit int) ([]Notificatio
 	}
 	return result, rows.Err()
 }
+
+// ClearNotificationsBefore deletes notifications created at or before the
+// provided cutoff time and returns the number of deleted rows.
+func (s *Store) ClearNotificationsBefore(ctx context.Context, before time.Time) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM notifications
+		WHERE created_at <= $1
+	`, before.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("store: clear notifications: %w", err)
+	}
+
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: clear notifications rows affected: %w", err)
+	}
+	return deleted, nil
+}

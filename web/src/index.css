@@ -771,6 +771,12 @@ select {
   margin-bottom: 18px;
 }
 
+.notif-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .notif-count {
   font-size: 13px;
   font-weight: 700;
@@ -779,6 +785,28 @@ select {
   border: 1px solid var(--border-default);
   padding: 3px 10px;
   text-shadow: var(--glow-yellow-sm);
+}
+
+.notif-clear-btn {
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  background: rgba(0, 212, 255, 0.08);
+  color: var(--accent-cyan);
+  padding: 3px 10px;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.notif-clear-btn:hover {
+  border-color: rgba(0, 212, 255, 0.75);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.35);
+}
+
+.notif-clear-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .notif-body {

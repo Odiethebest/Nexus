@@ -965,9 +965,51 @@ function SkeletonFeed() {
 }
 
 const PRIORITY_ORDER = { high: 0, normal: 1, low: 2 }
+const NOTIF_CLEAR_CUTOFF_KEY = 'nexus.notifications.clear_after'
+
+function readClearCutoff() {
+  if (typeof localStorage === 'undefined') return 0
+  const raw = localStorage.getItem(NOTIF_CLEAR_CUTOFF_KEY)
+  if (!raw) return 0
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return n
+}
+
+function saveClearCutoff(value) {
+  if (typeof localStorage === 'undefined') return
+  if (!Number.isFinite(value) || value <= 0) {
+    localStorage.removeItem(NOTIF_CLEAR_CUTOFF_KEY)
+    return
+  }
+  localStorage.setItem(NOTIF_CLEAR_CUTOFF_KEY, String(Math.floor(value)))
+}
+
+function eventTimeMillis(value) {
+  const d = value instanceof Date ? value : new Date(value)
+  const ms = d.getTime()
+  if (!Number.isFinite(ms)) return 0
+  return ms
+}
+
+function filterEventsAfter(items, cutoffMs) {
+  if (!Number.isFinite(cutoffMs) || cutoffMs <= 0) return items
+  return items.filter(item => eventTimeMillis(item?.timestamp) > cutoffMs)
+}
+
+async function clearNotificationsOnServer(beforeUnixMs) {
+  const res = await fetch('/notifications/clear', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ before_unix_ms: Math.floor(beforeUnixMs) }),
+  })
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res))
+  }
+}
 
 // ── NotificationsPanel ────────────────────────────────────────
-function NotificationsPanel({ notifications, initialising }) {
+function NotificationsPanel({ notifications, initialising, onClear }) {
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
@@ -990,7 +1032,17 @@ function NotificationsPanel({ notifications, initialising }) {
         <span className="panel-title">
           <span className="slash">╱</span> Live Notifications
         </span>
-        <span className="notif-count">{count} EVT</span>
+        <div className="notif-actions">
+          <span className="notif-count">{count} EVT</span>
+          <button
+            type="button"
+            className="notif-clear-btn"
+            onClick={onClear}
+            disabled={count === 0}
+          >
+            CLEAR
+          </button>
+        </div>
       </div>
 
       <div className="notif-body">
@@ -1031,8 +1083,14 @@ export default function App() {
   const [notifications, setNotifications] = useState([])
   const [wsStatus, setWsStatus]           = useState('disconnected')
   const [initialising, setInitialising]   = useState(true)
+  const [clearCutoffMs, setClearCutoffMs] = useState(() => readClearCutoff())
   const wsRef          = useRef(null)
   const reconnectTimer = useRef(null)
+  const clearCutoffRef = useRef(clearCutoffMs)
+
+  useEffect(() => {
+    clearCutoffRef.current = clearCutoffMs
+  }, [clearCutoffMs])
 
   useEffect(() => {
     function connect() {
@@ -1054,7 +1112,10 @@ export default function App() {
           const ev = normalizeRealtimeEvent(JSON.parse(e.data))
           if (!ev) return
           setInitialising(false)
-          setNotifications(prev => sortAndMergeEvents([ev, ...prev]))
+          setNotifications(prev => {
+            const merged = [ev, ...prev]
+            return sortAndMergeEvents(filterEventsAfter(merged, clearCutoffRef.current))
+          })
         } catch {}
       }
     }
@@ -1082,7 +1143,10 @@ export default function App() {
           .map(normalizeStoredNotification)
           .filter(Boolean)
 
-        setNotifications(prev => sortAndMergeEvents([...normalized, ...prev]))
+        setNotifications(prev => {
+          const merged = [...normalized, ...prev]
+          return sortAndMergeEvents(filterEventsAfter(merged, clearCutoffRef.current))
+        })
       } catch {
       } finally {
         if (!cancelled) setInitialising(false)
@@ -1101,7 +1165,22 @@ export default function App() {
     const normalized = normalizeRealtimeEvent(event)
     if (!normalized) return
     setInitialising(false)
-    setNotifications(prev => sortAndMergeEvents([normalized, ...prev]))
+    setNotifications(prev => {
+      const merged = [normalized, ...prev]
+      return sortAndMergeEvents(filterEventsAfter(merged, clearCutoffRef.current))
+    })
+  }
+
+  function handleClearNotifications() {
+    const cutoff = Date.now()
+    setClearCutoffMs(cutoff)
+    saveClearCutoff(cutoff)
+    setNotifications([])
+    setInitialising(false)
+
+    void clearNotificationsOnServer(cutoff).catch(err => {
+      console.warn('failed to clear notifications on server', err)
+    })
   }
 
   const connected = wsStatus === 'connected'
@@ -1123,7 +1202,11 @@ export default function App() {
       <main className="dash">
         <PublishPanel onPublished={handlePublished} />
         <StressLabPanel />
-        <NotificationsPanel notifications={notifications} initialising={initialising} />
+        <NotificationsPanel
+          notifications={notifications}
+          initialising={initialising}
+          onClear={handleClearNotifications}
+        />
       </main>
     </>
   )
