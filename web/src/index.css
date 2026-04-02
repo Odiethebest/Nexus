@@ -229,6 +229,19 @@ textarea:focus {
   box-shadow: 0 0 12px rgba(0, 212, 255, 0.4), inset 0 0 8px rgba(0, 212, 255, 0.05);
 }
 
+/* Keep dark input style when browsers apply password autofill paint. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: #f0f0e8;
+  caret-color: #f0f0e8;
+  border: 1px solid var(--border-input);
+  -webkit-box-shadow: 0 0 0 1000px var(--bg-input) inset;
+  box-shadow: 0 0 0 1000px var(--bg-input) inset;
+  transition: background-color 99999s ease-out 0s;
+}
+
 textarea {
   height: auto;
   min-height: 100px;
