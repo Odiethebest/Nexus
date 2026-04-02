@@ -116,7 +116,7 @@ For one-click loadtest, set these on the **producer service only**:
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `LOADTEST_ENABLED` | yes | Set `true` to enable the feature |
-| `LOADTEST_ADMIN_KEY` | yes | Server-side key, never expose to browser code |
+| `LOADTEST_ADMIN_KEY` | yes | Server-side key; dashboard sends it only on start requests and does not persist it in browser storage |
 | `LOADTEST_COOLDOWN_SECONDS` | yes | Suggested `300` |
 | `LOADTEST_MIN_START_INTERVAL_SECONDS` | yes | Suggested `10` per actor throttle |
 | `LOADTEST_MAX_PARALLEL` | yes | Suggested `1` |

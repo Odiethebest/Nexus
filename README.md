@@ -71,6 +71,7 @@ New to Nexus or evaluating the dashboard for the first time?
 - **Backpressure handling** — publisher confirms + per-lane QoS prefetch limits
 - **Notification history** — full delivery audit trail persisted to PostgreSQL
 - **Embedded dashboard frontend** — React bundle served by the producer via `go:embed`
+- **One-click Stress Lab** — start/poll cloud load tests from dashboard with backend guardrails
 
 ---
 
@@ -83,6 +84,7 @@ nexus/
 │   └── worker/            # Worker service entrypoint
 ├── internal/
 │   ├── broker/            # RabbitMQ connection, channel management, publisher
+│   ├── loadtest/          # k6 client, guardrails, insight scoring
 │   ├── worker/
 │   │   ├── email.go       # Email worker + goroutine pool
 │   │   ├── inapp.go       # In-app worker + WebSocket hub
@@ -90,6 +92,7 @@ nexus/
 │   ├── idempotency/       # Redis deduplication
 │   ├── store/             # PostgreSQL notification history
 │   └── hub/               # WebSocket connection manager
+├── scripts/               # Operational scripts (manual loadtest E2E checks)
 ├── web/                   # React + Vite frontend
 ├── deploy/
 │   ├── docker-compose.yml
@@ -192,16 +195,13 @@ TTL:   24h (covers any realistic redelivery window)
 
 ## Performance
 
-Load tested with [k6](https://k6.io):
+Stress Lab uses Grafana Cloud k6. Measured production-like numbers depend on your k6 scenario, target environment, and Railway resource tier.
 
-| Metric | Result |
-|---|---|
-| Throughput | X,XXX events/sec |
-| p95 processing latency | XXms |
-| Duplicate delivery rate | <0.X% |
-| DLQ rate under normal load | <0.X% |
+To run and capture reproducible metrics for your deployment:
 
-*(Numbers updated after load testing)*
+1. Configure `LOADTEST_*` + `K6_*` producer variables.
+2. Use dashboard **Start Load Test** or run the manual checklist script in [doc/testing.md](doc/testing.md).
+3. Record the final score, `RPS`, `P95`, and `Error %` shown in the completed run summary.
 
 ---
 

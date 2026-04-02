@@ -503,7 +503,7 @@ function PublishPanel({ onPublished }) {
 
 // ── StressLabPanel ───────────────────────────────────────────
 export function StressLabPanel() {
-  const [adminKey, setAdminKey] = useState(() => localStorage.getItem('nexus_loadtest_admin_key') ?? '')
+  const [adminKey, setAdminKey] = useState('')
   const [runId, setRunId] = useState(null)
   const [runStatus, setRunStatus] = useState('idle')
   const [phase, setPhase] = useState(LOADTEST_PHASE.IDLE)
@@ -523,10 +523,6 @@ export function StressLabPanel() {
   const [throughputShift, setThroughputShift] = useState(0)
   const [error, setError] = useState(null)
   const lastRpsRef = useRef(0)
-
-  useEffect(() => {
-    localStorage.setItem('nexus_loadtest_admin_key', adminKey)
-  }, [adminKey])
 
   useEffect(() => {
     if (cooldownSeconds <= 0) return

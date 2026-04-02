@@ -19,7 +19,7 @@ This document is implementation-focused and can be used directly as an engineeri
 - Prometheus app metrics already exist for publish/process paths: [internal/metrics/metrics.go](/Users/odieyang/Documents/Projects/Nexus/internal/metrics/metrics.go)
 - Frontend panel architecture already exists and can host a new "Stress Lab" panel: [web/src/App.jsx](/Users/odieyang/Documents/Projects/Nexus/web/src/App.jsx)
 - Producer container currently does not install k6 CLI binary, so local in-container `k6 run` is not plug-and-play: [deploy/Dockerfile.producer](/Users/odieyang/Documents/Projects/Nexus/deploy/Dockerfile.producer)
-- README performance section is placeholder values and should be backed by real runs after this feature: [README.md](/Users/odieyang/Documents/Projects/Nexus/README.md)
+- README performance section now explains how to capture deployment-specific metrics via Stress Lab runs: [README.md](/Users/odieyang/Documents/Projects/Nexus/README.md)
 
 ---
 
@@ -365,7 +365,8 @@ Phase 3:
 
 - User can trigger a test from UI with one click.
 - UI shows real run lifecycle and live metrics in under 5 seconds from start.
-- No direct token exposure in frontend code or network traces.
+- No direct `K6_API_TOKEN` exposure in frontend code or network traces.
+- Dashboard admin key is not persisted in browser storage.
 - Concurrency and cooldown limits are enforced by backend.
 - Feature works on Railway deployment with env-only configuration.
 - Failures are visible with clear reason and recovery action.

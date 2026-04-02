@@ -50,7 +50,7 @@ Both binaries read configuration from environment variables. Copy `.env.example`
 | `POSTGRES_DSN` | `postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable` | PostgreSQL DSN |
 | `LISTEN_ADDR` | `:8080` | HTTP server listen address |
 | `GRPC_ADDR` | `:50051` | gRPC server listen address |
-| `LOADTEST_ENABLED` | `true` | Enables one-click loadtest endpoints (when implemented) |
+| `LOADTEST_ENABLED` | `false` | Enables one-click loadtest endpoints |
 | `LOADTEST_ADMIN_KEY` | `replace_me` | Admin key required by loadtest start endpoint |
 | `LOADTEST_COOLDOWN_SECONDS` | `300` | Cooldown after each loadtest run |
 | `LOADTEST_MIN_START_INTERVAL_SECONDS` | `10` | Minimum interval between start attempts per actor |
@@ -67,7 +67,7 @@ Both binaries read configuration from environment variables. Copy `.env.example`
 | `K6_STACK_ID` | *(empty)* | Grafana stack ID passed in `X-Stack-Id` |
 | `K6_LOAD_TEST_ID` | *(empty)* | Existing k6 load test ID to trigger |
 | `LOADTEST_ALLOWED_ORIGINS` | *(empty)* | Optional trusted origins for cross-origin HTTP + `/ws` (empty = same-origin only) |
-| `LOADTEST_BUDGET_VUH_PER_DAY` | `200` | Optional daily VUH budget cap |
+| `LOADTEST_BUDGET_VUH_PER_DAY` | `0` | Optional daily VUH budget cap (`0` = disabled) |
 
 ### Worker (`cmd/worker`)
 
@@ -181,6 +181,20 @@ curl -X POST http://localhost:8080/dlq/replay \
 ### `GET /health`
 
 Returns `200 OK`. Used as a container liveness probe.
+
+### Loadtest Ops Endpoints
+
+When `LOADTEST_ENABLED=true`, producer exposes:
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/ops/loadtest/start` | `POST` | Start a new loadtest run (requires `X-Admin-Key`) |
+| `/ops/loadtest/{run_id}` | `GET` | Poll run status, metrics series, and computed insights |
+| `/ops/loadtest/latest` | `GET` | Fetch the latest recorded run |
+
+Notes:
+- `X-Admin-Key` is entered by the operator in the dashboard and sent only for start requests.
+- The dashboard no longer persists this key in browser storage between page reloads.
 
 ---
 

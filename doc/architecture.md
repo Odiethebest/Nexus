@@ -48,6 +48,9 @@ Accepts inbound events and owns the HTTP + gRPC surface:
 | `/events` | POST | Publish event to exchange |
 | `/notifications` | GET | Last 50 delivery records |
 | `/dlq/replay` | POST | Re-queue messages from a DLQ |
+| `/ops/loadtest/start` | POST | Start loadtest run (admin-key protected) |
+| `/ops/loadtest/{run_id}` | GET | Poll loadtest run status + insight envelope |
+| `/ops/loadtest/latest` | GET | Poll latest tracked loadtest run |
 | `/ws` | GET | WebSocket upgrade endpoint served by producer hub |
 | `/metrics` | GET | Prometheus scrape endpoint |
 | `/health` | GET | Liveness probe |
