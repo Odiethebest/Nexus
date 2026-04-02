@@ -2,6 +2,7 @@ package loadtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"nexus/internal/metrics"
@@ -19,11 +20,14 @@ type K6API interface {
 
 // ServiceConfig controls loadtest orchestration behavior.
 type ServiceConfig struct {
-	Enabled      bool
-	LoadTestID   int64
-	PollInterval time.Duration
-	DailyVUHCap  float64
-	Now          func() time.Time
+	Enabled              bool
+	LoadTestID           int64
+	PollInterval         time.Duration
+	DailyVUHCap          float64
+	MaxRunDuration       time.Duration
+	StatusRequestTimeout time.Duration
+	MetricQueryTimeout   time.Duration
+	Now                  func() time.Time
 }
 
 // Service orchestrates start/poll flows and computes UI-facing insights.
@@ -36,12 +40,32 @@ type Service struct {
 	mu           sync.Mutex
 	dailyVUHUsed map[string]float64
 	accountedRun map[int64]struct{}
+	runFirstSeen map[int64]time.Time
+}
+
+type runAborter interface {
+	AbortTestRun(ctx context.Context, runID int64) error
 }
 
 // NewService creates a loadtest service with defaults.
 func NewService(cfg ServiceConfig, client K6API, guard *Guard) *Service {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 3 * time.Second
+	}
+	if cfg.MaxRunDuration < 0 {
+		cfg.MaxRunDuration = 0
+	}
+	if cfg.StatusRequestTimeout < 0 {
+		cfg.StatusRequestTimeout = 0
+	}
+	if cfg.MetricQueryTimeout < 0 {
+		cfg.MetricQueryTimeout = 0
+	}
+	if cfg.StatusRequestTimeout == 0 {
+		cfg.StatusRequestTimeout = 4 * time.Second
+	}
+	if cfg.MetricQueryTimeout == 0 {
+		cfg.MetricQueryTimeout = 3 * time.Second
 	}
 	nowFn := cfg.Now
 	if nowFn == nil {
@@ -57,6 +81,7 @@ func NewService(cfg ServiceConfig, client K6API, guard *Guard) *Service {
 		now:          nowFn,
 		dailyVUHUsed: make(map[string]float64),
 		accountedRun: make(map[int64]struct{}),
+		runFirstSeen: make(map[int64]time.Time),
 	}
 }
 
@@ -120,15 +145,29 @@ func (s *Service) SyncRun(ctx context.Context, runID int64) (RunInsight, error) 
 	if s.client == nil {
 		return RunInsight{}, fmt.Errorf("loadtest: client is not configured")
 	}
-	run, err := s.client.GetTestRun(ctx, runID)
+	runCtx, cancelRun := withContextTimeout(ctx, s.cfg.StatusRequestTimeout)
+	defer cancelRun()
+	run, err := s.client.GetTestRun(runCtx, runID)
 	if err != nil {
 		return RunInsight{}, err
 	}
 	if run.ID == 0 {
 		run.ID = runID
 	}
+	startedAt := s.resolveRunStartTime(run.ID, run.Created)
+	if run.Created.IsZero() && !startedAt.IsZero() {
+		run.Created = startedAt
+	}
+	timeoutWarnings := s.abortIfRunTimedOut(ctx, &run, startedAt)
 
-	series, warnings := s.fetchCoreSeries(ctx, run.ID)
+	series := CoreSeries{}
+	warnings := []string(nil)
+	if shouldFetchCoreSeries(run.Status) {
+		series, warnings = s.fetchCoreSeries(ctx, run.ID)
+	}
+	if len(timeoutWarnings) > 0 {
+		warnings = append(timeoutWarnings, warnings...)
+	}
 	snapshot := buildSnapshot(series)
 	score, signals := scoreRun(run, series, snapshot)
 	metrics.LoadtestHealthScore.Set(float64(score))
@@ -138,6 +177,7 @@ func (s *Service) SyncRun(ctx context.Context, runID int64) (RunInsight, error) 
 
 	if run.Status.IsTerminal() {
 		s.guard.MarkFinished(run.ID, s.now().UTC())
+		s.clearRunTracking(run.ID)
 		metrics.LoadtestActiveRuns.Set(float64(s.guard.ActiveCount()))
 		s.accountRunCost(run)
 	}
@@ -199,31 +239,162 @@ func (s *Service) fetchCoreSeries(ctx context.Context, runID int64) (CoreSeries,
 	var out CoreSeries
 	var warnings []string
 
-	if points, err := s.client.QueryRangeK6(ctx, runID, "http_reqs", "rate", stepSeconds); err == nil {
-		out.RPS = points
-	} else {
-		warnings = append(warnings, "rps: "+trimErr(err))
+	type metricResult struct {
+		name   string
+		points []MetricPoint
+		err    error
 	}
 
-	if points, err := s.client.QueryRangeK6(ctx, runID, "http_req_duration", "histogram_quantile(0.95)", stepSeconds); err == nil {
-		out.P95MS = points
-	} else {
-		warnings = append(warnings, "p95: "+trimErr(err))
+	results := make(chan metricResult, 4)
+	runQuery := func(name, metric, query string) {
+		queryCtx, cancelQuery := withContextTimeout(ctx, s.cfg.MetricQueryTimeout)
+		defer cancelQuery()
+		points, err := s.client.QueryRangeK6(queryCtx, runID, metric, query, stepSeconds)
+		results <- metricResult{name: name, points: points, err: err}
 	}
 
-	if points, err := s.client.QueryRangeK6(ctx, runID, "http_req_failed", "rate", stepSeconds); err == nil {
-		out.ErrorRatePct = multiplySeries(points, 100)
-	} else {
-		warnings = append(warnings, "error_rate: "+trimErr(err))
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		runQuery("rps", "http_reqs", "rate")
+	}()
+	go func() {
+		defer wg.Done()
+		runQuery("p95", "http_req_duration", "histogram_quantile(0.95)")
+	}()
+	go func() {
+		defer wg.Done()
+		runQuery("error_rate", "http_req_failed", "rate")
+	}()
+	go func() {
+		defer wg.Done()
+		runQuery("vus", "vus", "sum(last by (instance_id))")
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	byName := make(map[string]metricResult, 4)
+	for res := range results {
+		byName[res.name] = res
 	}
 
-	if points, err := s.client.QueryRangeK6(ctx, runID, "vus", "sum(last by (instance_id))", stepSeconds); err == nil {
-		out.VUs = points
-	} else {
-		warnings = append(warnings, "vus: "+trimErr(err))
+	for _, name := range []string{"rps", "p95", "error_rate", "vus"} {
+		res, ok := byName[name]
+		if !ok {
+			warnings = append(warnings, name+": missing query result")
+			continue
+		}
+		if res.err != nil {
+			warnings = append(warnings, name+": "+trimErr(res.err))
+			continue
+		}
+
+		switch name {
+		case "rps":
+			out.RPS = res.points
+		case "p95":
+			out.P95MS = res.points
+		case "error_rate":
+			out.ErrorRatePct = multiplySeries(res.points, 100)
+		case "vus":
+			out.VUs = res.points
+		}
 	}
 
 	return out, warnings
+}
+
+func (s *Service) abortIfRunTimedOut(ctx context.Context, run *TestRun, startedAt time.Time) []string {
+	if run == nil {
+		return nil
+	}
+	if s.cfg.MaxRunDuration <= 0 {
+		return nil
+	}
+	if run.Status.IsTerminal() {
+		return nil
+	}
+	if startedAt.IsZero() {
+		return nil
+	}
+	elapsed := s.now().UTC().Sub(startedAt.UTC())
+	if elapsed < s.cfg.MaxRunDuration {
+		return nil
+	}
+
+	warnings := []string{
+		fmt.Sprintf(
+			"run exceeded %s, forcing abort for demo responsiveness",
+			s.cfg.MaxRunDuration.Truncate(time.Second),
+		),
+	}
+
+	if aborter, ok := s.client.(runAborter); ok {
+		if err := aborter.AbortTestRun(ctx, run.ID); err != nil {
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != 409 {
+				warnings = append(warnings, "abort request failed: "+trimErr(err))
+			}
+		}
+	} else {
+		warnings = append(warnings, "client does not support abort API")
+	}
+
+	now := s.now().UTC()
+	run.Status = StatusAborted
+	run.Result = "aborted"
+	run.Ended = &now
+	return warnings
+}
+
+func shouldFetchCoreSeries(status RunStatus) bool {
+	switch status {
+	case StatusRunning, StatusProcessingMetrics, StatusCompleted, StatusAborted:
+		return true
+	default:
+		return false
+	}
+}
+
+func withContextTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func (s *Service) resolveRunStartTime(runID int64, created time.Time) time.Time {
+	if !created.IsZero() {
+		return created.UTC()
+	}
+	if startedAt, ok := s.guard.ActiveRunStartedAt(runID); ok && !startedAt.IsZero() {
+		return startedAt.UTC()
+	}
+	if runID <= 0 {
+		return time.Time{}
+	}
+
+	now := s.now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if firstSeen, ok := s.runFirstSeen[runID]; ok && !firstSeen.IsZero() {
+		return firstSeen
+	}
+	s.runFirstSeen[runID] = now
+	return now
+}
+
+func (s *Service) clearRunTracking(runID int64) {
+	if runID <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.runFirstSeen, runID)
 }
 
 func buildSnapshot(series CoreSeries) InsightSnapshot {

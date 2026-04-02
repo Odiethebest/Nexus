@@ -183,6 +183,22 @@ func (c *Client) GetTestRun(ctx context.Context, runID int64) (TestRun, error) {
 	return decodeTestRun(raw)
 }
 
+// AbortTestRun aborts a running cloud test.
+// A 409 response (already non-running) is treated as a no-op.
+func (c *Client) AbortTestRun(ctx context.Context, runID int64) error {
+	path := fmt.Sprintf("/cloud/v6/test_runs/%d/abort", runID)
+	_, err := c.doJSON(ctx, http.MethodPost, path, nil, nil)
+	if err == nil {
+		return nil
+	}
+
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
+		return nil
+	}
+	return err
+}
+
 // QueryRangeK6 returns a merged timeseries for a metric query.
 func (c *Client) QueryRangeK6(
 	ctx context.Context,

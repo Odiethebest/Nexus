@@ -71,6 +71,7 @@ const EVENT_PRESETS = [
 ]
 const EVENT_TYPE_OPTIONS = Array.from(new Set(EVENT_PRESETS.map(item => item.type))).sort()
 const LOADTEST_FLOW = ['created', 'queued', 'initializing', 'running', 'processing_metrics', 'completed']
+const LOADTEST_DEMO_TARGET_SECONDS = 60
 const LOADTEST_PHASE = Object.freeze({
   IDLE: 'idle',
   STARTING: 'starting',
@@ -79,8 +80,10 @@ const LOADTEST_PHASE = Object.freeze({
   COMPLETED: 'completed',
   FAILED: 'failed',
 })
-const DEFAULT_POLL_MS = 3000
-const BACKOFF_POLL_MS = [5000, 6500, 8000]
+const DEFAULT_POLL_MS = 2000
+const STARTUP_FAST_POLL_MS = 1000
+const ACTIVE_MIN_POLL_MS = 1500
+const BACKOFF_POLL_MS = [2500, 3500, 5000]
 const P95_THRESHOLD_MS = 120
 const ERROR_SPIKE_PCT = 2
 const FLOW_LABEL = Object.freeze({
@@ -384,6 +387,12 @@ function fmtCountdown(totalSeconds) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
 }
 
+function toUnixMillis(value) {
+  if (!value) return 0
+  const ms = new Date(value).getTime()
+  return Number.isFinite(ms) ? ms : 0
+}
+
 function phaseFromRunStatus(status) {
   switch (status) {
     case 'created':
@@ -610,8 +619,29 @@ export function StressLabPanel() {
   const [tempPollErrors, setTempPollErrors] = useState(0)
   const [cooldownSeconds, setCooldownSeconds] = useState(0)
   const [throughputShift, setThroughputShift] = useState(0)
+  const [runStartedAtMs, setRunStartedAtMs] = useState(0)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const [pollAfterMs, setPollAfterMs] = useState(DEFAULT_POLL_MS)
+  const [nextPollAtMs, setNextPollAtMs] = useState(0)
+  const [nextPollSeconds, setNextPollSeconds] = useState(0)
   const [error, setError] = useState(null)
   const lastRpsRef = useRef(0)
+
+  useEffect(() => {
+    if (!runStartedAtMs) {
+      setElapsedSeconds(0)
+      return
+    }
+
+    const tick = () => {
+      const elapsed = Math.floor((Date.now() - runStartedAtMs) / 1000)
+      setElapsedSeconds(Math.max(0, elapsed))
+    }
+
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  }, [runStartedAtMs])
 
   useEffect(() => {
     if (cooldownSeconds <= 0) return
@@ -630,6 +660,20 @@ export function StressLabPanel() {
     }
   }, [cooldownSeconds, error])
 
+  useEffect(() => {
+    if (!nextPollAtMs) {
+      setNextPollSeconds(0)
+      return
+    }
+    const tick = () => {
+      const left = Math.max(0, (nextPollAtMs - Date.now()) / 1000)
+      setNextPollSeconds(left)
+    }
+    tick()
+    const timer = setInterval(tick, 200)
+    return () => clearInterval(timer)
+  }, [nextPollAtMs])
+
   async function syncRun(targetRunId) {
     if (!targetRunId) return
     try {
@@ -638,6 +682,10 @@ export function StressLabPanel() {
       const data = await res.json()
 
       const nextStatus = data?.run?.status || 'running'
+      const startedAt = toUnixMillis(data?.run?.created)
+      if (startedAt > 0) {
+        setRunStartedAtMs(startedAt)
+      }
       const nextSnapshot = {
         rps: Number(data?.snapshot?.rps ?? 0),
         p95_ms: Number(data?.snapshot?.p95_ms ?? 0),
@@ -662,6 +710,7 @@ export function StressLabPanel() {
 
       setTempPollErrors(0)
       setCooldownSeconds(0)
+      setNextPollAtMs(0)
       setError(null)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -677,6 +726,7 @@ export function StressLabPanel() {
       }
 
       setTempPollErrors(0)
+      setNextPollAtMs(0)
       setPhase(LOADTEST_PHASE.FAILED)
       setCooldownSeconds(parseRetrySeconds(message))
       setError(message)
@@ -693,6 +743,9 @@ export function StressLabPanel() {
     setPhase(LOADTEST_PHASE.STARTING)
     setTempPollErrors(0)
     setCooldownSeconds(0)
+    setPollAfterMs(DEFAULT_POLL_MS)
+    setNextPollAtMs(0)
+    setNextPollSeconds(0)
     try {
       const res = await fetch('/ops/loadtest/start', {
         method: 'POST',
@@ -714,6 +767,13 @@ export function StressLabPanel() {
         throw new Error('loadtest start response missing run_id')
       }
       const initialStatus = data?.status || 'created'
+      const pollAfterSeconds = Number(data?.poll_after_seconds)
+      const nextPollAfterMs = Number.isFinite(pollAfterSeconds) && pollAfterSeconds > 0
+        ? Math.round(pollAfterSeconds * 1000)
+        : DEFAULT_POLL_MS
+      const startedAt = toUnixMillis(data?.started_at)
+      setPollAfterMs(nextPollAfterMs)
+      setRunStartedAtMs(startedAt > 0 ? startedAt : Date.now())
       setRunId(nextRunId)
       setRunStatus(initialStatus)
       setPhase(phaseFromRunStatus(initialStatus))
@@ -729,24 +789,36 @@ export function StressLabPanel() {
       await syncRun(nextRunId)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
+      setNextPollAtMs(0)
       setPhase(LOADTEST_PHASE.FAILED)
       setCooldownSeconds(parseRetrySeconds(message))
       setError(message)
     }
   }
 
+  const startupSync = runStatus === 'created' || runStatus === 'queued' || runStatus === 'initializing'
+  const steadyPollMs = startupSync
+    ? Math.min(pollAfterMs, STARTUP_FAST_POLL_MS)
+    : Math.max(ACTIVE_MIN_POLL_MS, pollAfterMs)
   const pollDelayMs = tempPollErrors > 0
     ? BACKOFF_POLL_MS[Math.min(tempPollErrors, BACKOFF_POLL_MS.length) - 1]
-    : DEFAULT_POLL_MS
+    : steadyPollMs
 
   useEffect(() => {
-    if (!runId) return
-    if (!isPollingPhase(phase)) return
+    if (!runId || !isPollingPhase(phase)) {
+      setNextPollAtMs(0)
+      setNextPollSeconds(0)
+      return
+    }
+    const nextAt = Date.now() + pollDelayMs
+    setNextPollAtMs(nextAt)
     const t = setTimeout(() => {
+      setNextPollAtMs(0)
+      setNextPollSeconds(0)
       syncRun(runId)
     }, pollDelayMs)
     return () => clearTimeout(t)
-  }, [runId, phase, pollDelayMs])
+  }, [runId, phase, pollDelayMs, runStatus, pollAfterMs])
 
   const statusStep = statusIndex(runStatus)
   const score = Number.isFinite(healthScore) ? Math.max(0, Math.min(100, Math.round(healthScore))) : 0
@@ -775,6 +847,7 @@ export function StressLabPanel() {
   const primaryWarning = warnings[0] ? `Signal warning: ${warnings[0]}` : null
   const temporaryPollingIssue = tempPollErrors > 0 && activePhase
   const backoffSeconds = (pollDelayMs / 1000).toFixed(1)
+  const nextSyncCopy = activePhase ? `${nextPollSeconds.toFixed(1)}s` : '--'
   const cooldownCopy = cooldownSeconds > 0 ? `Try again in ${fmtCountdown(cooldownSeconds)}` : ''
   const noTrafficButBusy = activePhase &&
     snapshot.vus > 0 &&
@@ -784,6 +857,9 @@ export function StressLabPanel() {
   const errorHint = cooldownCopy || (temporaryPollingIssue
     ? `Temporary sync issue. Auto retry in ${backoffSeconds}s.`
     : retryHint(error))
+  const demoProgress = Math.min(100, Math.round((elapsedSeconds / LOADTEST_DEMO_TARGET_SECONDS) * 100))
+  const remainingToTarget = Math.max(0, LOADTEST_DEMO_TARGET_SECONDS - elapsedSeconds)
+  const overDemoTarget = activePhase && elapsedSeconds >= LOADTEST_DEMO_TARGET_SECONDS
 
   let startBtnLabel = 'Start Load Test'
   if (missingAdminKey && !activePhase && cooldownSeconds <= 0) {
@@ -823,6 +899,22 @@ export function StressLabPanel() {
         <span>RUN: {runId ?? '--'}</span>
         <span>STATUS: {runStatus}</span>
       </div>
+      {runId && (
+        <div className="stress-timer">
+          <div className="stress-timer__meta">
+            <span>TARGET: {fmtCountdown(LOADTEST_DEMO_TARGET_SECONDS)}</span>
+            <span>ELAPSED: {fmtCountdown(elapsedSeconds)}</span>
+            <span>LEFT: {fmtCountdown(remainingToTarget)}</span>
+            <span>NEXT SYNC: {nextSyncCopy}</span>
+          </div>
+          <div className="stress-progress" aria-label="demo progress">
+            <span className="stress-progress__bar" style={{ width: `${demoProgress}%` }} />
+          </div>
+          {overDemoTarget && (
+            <p className="stress-timer__hint">Run exceeded 1 minute. Backend is forcing an abort for demo speed.</p>
+          )}
+        </div>
+      )}
       <p className={`stress-phase ${phaseClass(phase)}`}>PHASE: {phase}</p>
       {missingAdminKey && !activePhase && cooldownSeconds <= 0 && !error && (
         <p className="stress-guidance">Paste the server-side admin key, then start the run.</p>

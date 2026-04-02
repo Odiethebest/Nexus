@@ -120,7 +120,10 @@ For one-click loadtest, set these on the **producer service only**:
 | `LOADTEST_COOLDOWN_SECONDS` | yes | Suggested `300` |
 | `LOADTEST_MIN_START_INTERVAL_SECONDS` | yes | Suggested `10` per actor throttle |
 | `LOADTEST_MAX_PARALLEL` | yes | Suggested `1` |
-| `LOADTEST_POLL_INTERVAL_SECONDS` | yes | Suggested `3` |
+| `LOADTEST_POLL_INTERVAL_SECONDS` | yes | Suggested `2` |
+| `LOADTEST_MAX_RUN_SECONDS` | yes | Suggested `55`; server forces abort when exceeded to keep demo flow responsive |
+| `LOADTEST_STATUS_TIMEOUT_SECONDS` | yes | Suggested `4`; timeout for upstream run status calls |
+| `LOADTEST_QUERY_TIMEOUT_SECONDS` | yes | Suggested `3`; timeout for each upstream metrics query |
 | `LOADTEST_REQUEST_TIMEOUT_SECONDS` | yes | Suggested `20`; runtime clamps to `5-30` seconds |
 | `LOADTEST_UPSTREAM_RETRY_MAX` | yes | Suggested `2` |
 | `LOADTEST_UPSTREAM_RETRY_BASE_MS` | yes | Suggested `250` |

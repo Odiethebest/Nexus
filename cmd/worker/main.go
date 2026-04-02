@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"nexus/internal/broker"
+	"nexus/internal/envutil"
 	"nexus/internal/hub"
 	"nexus/internal/idempotency"
 	"nexus/internal/mailer"
@@ -23,6 +24,12 @@ import (
 )
 
 func main() {
+	if path, err := envutil.LoadDotEnvIfPresent(); err != nil {
+		slog.Warn("failed to auto-load .env", "err", err)
+	} else if path != "" {
+		slog.Info("loaded environment file", "path", path)
+	}
+
 	amqpURL := getenv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
 	redisURL := getenv("REDIS_URL", "redis://localhost:6379")
 	pgDSN := getenv("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")

@@ -177,6 +177,14 @@ func (g *Guard) ActiveCount() int {
 	return len(g.activeRunStartedAt)
 }
 
+// ActiveRunStartedAt returns the tracked start timestamp for a run.
+func (g *Guard) ActiveRunStartedAt(runID int64) (time.Time, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	startedAt, ok := g.activeRunStartedAt[runID]
+	return startedAt, ok
+}
+
 // CooldownRemaining returns current cooldown remainder.
 func (g *Guard) CooldownRemaining(now time.Time) time.Duration {
 	g.mu.Lock()

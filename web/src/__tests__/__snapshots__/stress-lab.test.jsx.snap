@@ -55,6 +55,39 @@ exports[`StressLabPanel snapshots > matches completed state snapshot 1`] = `
       completed
     </span>
   </div>
+  <div
+    class="stress-timer"
+  >
+    <div
+      class="stress-timer__meta"
+    >
+      <span>
+        TARGET: 
+        01:00
+      </span>
+      <span>
+        ELAPSED: 
+        00:00
+      </span>
+      <span>
+        LEFT: 
+        01:00
+      </span>
+      <span>
+        NEXT SYNC: 
+        --
+      </span>
+    </div>
+    <div
+      aria-label="demo progress"
+      class="stress-progress"
+    >
+      <span
+        class="stress-progress__bar"
+        style="width: 0%;"
+      />
+    </div>
+  </div>
   <p
     class="stress-phase stress-phase--completed"
   >

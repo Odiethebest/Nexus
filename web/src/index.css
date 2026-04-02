@@ -355,6 +355,45 @@ select {
   text-transform: uppercase;
 }
 
+.stress-timer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stress-timer__meta {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  row-gap: 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.stress-progress {
+  height: 8px;
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  background: rgba(0, 212, 255, 0.08);
+  overflow: hidden;
+}
+
+.stress-progress__bar {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.9), rgba(245, 230, 66, 0.9));
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.35);
+  transition: width 0.35s ease;
+}
+
+.stress-timer__hint {
+  font-size: 11px;
+  color: var(--accent-yellow);
+  letter-spacing: 0.05em;
+}
+
 .stress-phase {
   font-size: 12px;
   letter-spacing: 0.08em;

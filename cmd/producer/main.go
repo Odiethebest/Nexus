@@ -21,6 +21,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"nexus/internal/broker"
+	"nexus/internal/envutil"
 	"nexus/internal/grpcserver"
 	"nexus/internal/hub"
 	"nexus/internal/loadtest"
@@ -34,10 +35,18 @@ const (
 	defaultLoadtestRequestTimeout = 20 * time.Second
 	minLoadtestRequestTimeout     = 5 * time.Second
 	maxLoadtestRequestTimeout     = 30 * time.Second
+	defaultLoadtestStatusTimeout  = 4 * time.Second
+	defaultLoadtestQueryTimeout   = 3 * time.Second
 	corsAllowAllMarker            = "*"
 )
 
 func main() {
+	if path, err := envutil.LoadDotEnvIfPresent(); err != nil {
+		slog.Warn("failed to auto-load .env", "err", err)
+	} else if path != "" {
+		slog.Info("loaded environment file", "path", path)
+	}
+
 	amqpURL := getenv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
 	pgDSN := getenv("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
 	listenAddr := getenv("LISTEN_ADDR", ":"+getenv("PORT", "8080"))
@@ -499,16 +508,21 @@ func actorFromRequest(r *http.Request) string {
 
 func initLoadtestService() (*loadtest.Service, error) {
 	enabled := getenvBool("LOADTEST_ENABLED", false)
-	pollInterval := time.Duration(getenvInt("LOADTEST_POLL_INTERVAL_SECONDS", 3)) * time.Second
+	pollInterval := time.Duration(getenvInt("LOADTEST_POLL_INTERVAL_SECONDS", 2)) * time.Second
 	if pollInterval <= 0 {
-		pollInterval = 3 * time.Second
+		pollInterval = 2 * time.Second
 	}
+	statusTimeout := time.Duration(getenvInt("LOADTEST_STATUS_TIMEOUT_SECONDS", int(defaultLoadtestStatusTimeout.Seconds()))) * time.Second
+	queryTimeout := time.Duration(getenvInt("LOADTEST_QUERY_TIMEOUT_SECONDS", int(defaultLoadtestQueryTimeout.Seconds()))) * time.Second
 
 	serviceCfg := loadtest.ServiceConfig{
-		Enabled:      enabled,
-		LoadTestID:   getenvInt64("K6_LOAD_TEST_ID", 0),
-		PollInterval: pollInterval,
-		DailyVUHCap:  getenvFloat64("LOADTEST_BUDGET_VUH_PER_DAY", 0),
+		Enabled:              enabled,
+		LoadTestID:           getenvInt64("K6_LOAD_TEST_ID", 0),
+		PollInterval:         pollInterval,
+		DailyVUHCap:          getenvFloat64("LOADTEST_BUDGET_VUH_PER_DAY", 0),
+		MaxRunDuration:       time.Duration(getenvInt("LOADTEST_MAX_RUN_SECONDS", 55)) * time.Second,
+		StatusRequestTimeout: statusTimeout,
+		MetricQueryTimeout:   queryTimeout,
 	}
 
 	guardCfg := loadtest.GuardConfig{

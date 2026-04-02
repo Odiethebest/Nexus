@@ -55,7 +55,10 @@ Both binaries read configuration from environment variables. Copy `.env.example`
 | `LOADTEST_COOLDOWN_SECONDS` | `300` | Cooldown after each loadtest run |
 | `LOADTEST_MIN_START_INTERVAL_SECONDS` | `10` | Minimum interval between start attempts per actor |
 | `LOADTEST_MAX_PARALLEL` | `1` | Maximum concurrent loadtest runs |
-| `LOADTEST_POLL_INTERVAL_SECONDS` | `3` | Poll interval for loadtest status/metrics |
+| `LOADTEST_POLL_INTERVAL_SECONDS` | `2` | Poll interval for loadtest status/metrics |
+| `LOADTEST_MAX_RUN_SECONDS` | `55` | Max run duration before server forces abort (demo responsiveness) |
+| `LOADTEST_STATUS_TIMEOUT_SECONDS` | `4` | Timeout for upstream run status calls |
+| `LOADTEST_QUERY_TIMEOUT_SECONDS` | `3` | Timeout for each upstream metrics query |
 | `LOADTEST_REQUEST_TIMEOUT_SECONDS` | `20` | Upstream k6 API timeout per request (clamped to 5-30 seconds) |
 | `LOADTEST_UPSTREAM_RETRY_MAX` | `2` | Upstream retry attempts after first request |
 | `LOADTEST_UPSTREAM_RETRY_BASE_MS` | `250` | Base backoff in milliseconds for retry |
