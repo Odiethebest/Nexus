@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,7 +27,6 @@ import (
 	"nexus/internal/metrics"
 	"nexus/internal/replay"
 	"nexus/internal/store"
-	nexusweb "nexus/web"
 )
 
 const (
@@ -72,7 +70,7 @@ func main() {
 	}
 
 	allowedOrigins := parseAllowedOrigins(os.Getenv("LOADTEST_ALLOWED_ORIGINS"))
-	slog.Info("trusted frontend origins configured", "count", len(allowedOrigins))
+	slog.Info("trusted request origins configured", "count", len(allowedOrigins))
 	wsHub := hub.New(func(r *http.Request) bool {
 		return isRequestOriginAllowed(r, allowedOrigins)
 	})
@@ -112,13 +110,10 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// ── Static frontend ───────────────────────────────────────────────────
-	staticFS, _ := fs.Sub(nexusweb.FS, "dist")
-	mux.Handle("GET /assets/", http.FileServerFS(staticFS))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		index, _ := nexusweb.FS.ReadFile("dist/index.html")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(index)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("nexus producer"))
 	})
 
 	srv := &http.Server{
@@ -389,12 +384,30 @@ func handleLoadtestStatus(svc *loadtest.Service, demo *loadtest.DemoService) htt
 			return
 		}
 
+		modeQuery := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+		forceDemo := modeQuery == loadtestModeDemo
+		forceReal := modeQuery == loadtestModeReal
+
 		mode := loadtestModeReal
 		var insight loadtest.RunInsight
-		if demo != nil && demo.HasRun(runID) {
+		switch {
+		case forceDemo:
+			if demo == nil {
+				writeJSONError(w, http.StatusServiceUnavailable, "demo loadtest service unavailable")
+				return
+			}
 			mode = loadtestModeDemo
 			insight, err = demo.SyncRun(r.Context(), runID)
-		} else {
+		case forceReal:
+			if svc == nil {
+				writeJSONError(w, http.StatusServiceUnavailable, "loadtest service unavailable")
+				return
+			}
+			insight, err = svc.SyncRun(r.Context(), runID)
+		case demo != nil && demo.HasRun(runID):
+			mode = loadtestModeDemo
+			insight, err = demo.SyncRun(r.Context(), runID)
+		default:
 			if svc == nil {
 				writeJSONError(w, http.StatusServiceUnavailable, "loadtest service unavailable")
 				return
@@ -799,6 +812,9 @@ func sanitizeLoadtestRequestTimeout(requested time.Duration) time.Duration {
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		slog.Error("failed to write JSON response", "err", err)

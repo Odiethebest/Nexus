@@ -1,19 +1,10 @@
-[phases.setup]
-nixPkgs = ["nodejs_20"]
-
-[variables]
-NPM_CONFIG_PRODUCTION = "false"
-
 [phases.install]
 cmds = [
-  "go mod download",
-  "npm --prefix web ci --include=dev"
+  "go mod download"
 ]
 
 [phases.build]
 cmds = [
-  "npm --prefix web run build",
-  "test -f web/dist/index.html",
   "go build -ldflags='-w -s' -o out ./cmd/producer"
 ]
 
