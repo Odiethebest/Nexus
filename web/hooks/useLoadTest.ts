@@ -12,6 +12,9 @@ export interface LoadTestResult {
   [key: string]: unknown
 }
 
+// Terminal statuses from the Go backend (loadtest/types.go)
+const TERMINAL = new Set(['completed', 'aborted', 'error'])
+
 export function useLoadTest() {
   const [status, setStatus]   = useState<LoadTestStatus>('idle')
   const [result, setResult]   = useState<LoadTestResult | null>(null)
@@ -22,19 +25,27 @@ export function useLoadTest() {
     try {
       setStatus('running')
       setError(null)
-      await startLoadTest('demo')
+      console.log('[loadtest] POST /ops/loadtest/start { mode: "demo" }')
+      const startResp = await startLoadTest('demo')
+      console.log('[loadtest] start response:', startResp)
+
       pollRef.current = setInterval(async () => {
         try {
           const d = await getLoadTestLatest()
+          const runStatus = d?.run?.status ?? d?.status
+          console.log('[loadtest] poll run.status:', runStatus)
           setResult(d)
-          const s = d?.run?.status ?? d?.status
-          if (s === 'finished' || s === 'completed' || s === 'error') {
-            setStatus(s === 'error' ? 'error' : 'completed')
+          if (TERMINAL.has(runStatus)) {
+            setStatus(runStatus === 'aborted' ? 'error' : 'completed')
+            if (runStatus === 'aborted') setError('Load test was aborted')
             clearInterval(pollRef.current!)
           }
-        } catch {}
+        } catch (e) {
+          console.warn('[loadtest] poll error:', e)
+        }
       }, 2000)
     } catch (e) {
+      console.error('[loadtest] start error:', e)
       setStatus('error')
       setError(String(e))
     }
