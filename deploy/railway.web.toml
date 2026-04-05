@@ -1,0 +1,12 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/Dockerfile.web"
+
+[build.args]
+NEXT_PUBLIC_API_URL = "https://nexus.odieyang.com"
+NEXT_PUBLIC_WS_URL = "wss://nexus.odieyang.com/ws"
+
+[deploy]
+startCommand = "node server.js"
+healthcheckPath = "/"
+healthcheckTimeout = 300
