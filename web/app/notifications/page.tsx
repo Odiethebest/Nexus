@@ -36,7 +36,7 @@ export default function NotificationsPage() {
 
   useEffect(() => { document.title = "Notifications — Nexus" }, [])
 
-  const filtered = notifications.filter(n => {
+  const filtered = (notifications ?? []).filter(n => {
     if (channel !== "all" && n.channel !== channel) return false
     if (status  !== "all" && n.status  !== status)  return false
     if (search && !n.event_type.toLowerCase().includes(search.toLowerCase())) return false

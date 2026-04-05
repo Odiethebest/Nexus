@@ -18,7 +18,7 @@ export function useNotifications() {
       try {
         const data = await getNotifications()
         if (!cancelled) {
-          setNotifications(data)
+          setNotifications(Array.isArray(data) ? data : [])
           setLoading(false)
           setError(null)
         }

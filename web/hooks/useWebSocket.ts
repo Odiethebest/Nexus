@@ -13,8 +13,9 @@ export function useWebSocket() {
 
     // Pre-populate with recent notifications so the feed isn't empty on mount
     getNotifications()
-      .then(notifications => {
-        const initial: WsEvent[] = notifications
+      .then(data => {
+        const list = Array.isArray(data) ? data : []
+        const initial: WsEvent[] = list
           .slice(0, 50)
           // n.payload is the full broker.Event JSON stored by the worker:
           //   { message_id, type, priority, payload: { ...inner... }, timestamp }
@@ -24,7 +25,7 @@ export function useWebSocket() {
             message_id: n.message_id,
             type:       n.event_type,
             priority:   n.payload?.priority ?? 'normal',
-            channel:    n.channel,
+            channel:    n.channel as import('@/types').Channel,
             payload:    n.payload?.payload  ?? n.payload ?? {},
             timestamp:  n.created_at,
           }))
