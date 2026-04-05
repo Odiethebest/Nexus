@@ -106,8 +106,8 @@ export default function LoadTestPage() {
             </Card>
           </div>
 
-          {/* Live metrics */}
-          <SectionCards metrics={latest} loading={metricsLoading} />
+          {/* Live metrics — backend demo series exposes P95, not P99 */}
+          <SectionCards metrics={latest} loading={metricsLoading} latencyLabel="P95 Latency" />
 
           {/* Demo run throughput chart */}
           {(running || completed) && chartData.length > 0 && (

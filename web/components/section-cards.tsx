@@ -14,13 +14,14 @@ import type { MetricsSummary } from "@/types"
 interface SectionCardsProps {
   metrics: MetricsSummary | null
   loading: boolean
+  latencyLabel?: string
 }
 
 function fmt1(v: number): string {
   return String(Number(v.toFixed(1)))
 }
 
-export function SectionCards({ metrics, loading }: SectionCardsProps) {
+export function SectionCards({ metrics, loading, latencyLabel = "P99 Latency" }: SectionCardsProps) {
   return (
     <div className="grid grid-cols-2 gap-4 px-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs lg:px-6 xl:grid-cols-4 dark:*:data-[slot=card]:bg-card">
       <Card className="@container/card">
@@ -37,7 +38,7 @@ export function SectionCards({ metrics, loading }: SectionCardsProps) {
 
       <Card className="@container/card">
         <CardHeader>
-          <CardDescription>P99 Latency</CardDescription>
+          <CardDescription>{latencyLabel}</CardDescription>
           <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
             {loading ? <Skeleton className="h-9 w-24" /> : metrics ? `${fmt1(metrics.processing_latency_p99_ms)} ms` : "—"}
           </CardTitle>
