@@ -1,38 +1,58 @@
-import type { Notification, MetricsSummary } from '@/types'
-
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080'
 
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init)
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-  }
-  return res.json() as Promise<T>
+export async function getNotifications() {
+  const res = await fetch(`${BASE}/notifications`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }
 
-export async function getNotifications(): Promise<Notification[]> {
-  return fetchJSON<Notification[]>('/notifications')
+export async function getMetricsSummary() {
+  const res = await fetch(`${BASE}/api/metrics/summary`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }
 
-export async function getMetricsSummary(): Promise<MetricsSummary> {
-  return fetchJSON<MetricsSummary>('/api/metrics/summary')
+export async function getLoadTestLatest() {
+  const res = await fetch(`${BASE}/ops/loadtest/latest`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }
 
-export async function postEvent(body: unknown): Promise<{ message_id: string }> {
-  return fetchJSON<{ message_id: string }>('/events', {
+export async function postEvent(body: unknown) {
+  const res = await fetch(`${BASE}/events`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function startLoadTest(mode = 'demo') {
+  const res = await fetch(`${BASE}/ops/loadtest/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ mode }),
   })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }
 
-export async function getLoadTestLatest(): Promise<unknown> {
-  return fetchJSON<unknown>('/ops/loadtest/latest')
+export async function clearNotifications() {
+  const res = await fetch(`${BASE}/notifications/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ before_unix_ms: Date.now() }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }
 
-export async function replayDLQ(): Promise<void> {
-  const res = await fetch(`${BASE}/dlq/replay`, { method: 'POST' })
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-  }
+export async function replayDLQ(queue: string, max = 100) {
+  const res = await fetch(`${BASE}/dlq/replay`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ queue, max }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }

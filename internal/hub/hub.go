@@ -49,6 +49,14 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	c.readPump(func() { h.unregister(c) })
 }
 
+// Count returns the number of currently connected clients.
+func (h *Hub) Count() int {
+	h.mu.RLock()
+	n := len(h.clients)
+	h.mu.RUnlock()
+	return n
+}
+
 // Broadcast sends msg to every connected client.
 // Slow clients are dropped rather than blocking the broadcaster.
 func (h *Hub) Broadcast(msg []byte) {

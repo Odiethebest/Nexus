@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,12 +12,12 @@ import (
 
 // Notification is a persisted delivery record.
 type Notification struct {
-	MessageID string
-	Channel   string
-	EventType string
-	Status    string
-	Payload   []byte
-	CreatedAt time.Time
+	MessageID string          `json:"message_id"`
+	Channel   string          `json:"channel"`
+	EventType string          `json:"event_type"`
+	Status    string          `json:"status"`
+	Payload   json.RawMessage `json:"payload"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 // Store persists notification history to PostgreSQL.

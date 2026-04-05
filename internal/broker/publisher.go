@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,7 +94,8 @@ func (p *Publisher) Publish(ctx context.Context, eventType, priority string, pay
 }
 
 func (p *Publisher) publishAndConfirm(ctx context.Context, event Event, body []byte) error {
-	routingKey := fmt.Sprintf("event.%s.%s", event.Type, event.Priority)
+	safeType := strings.ReplaceAll(event.Type, ".", "_")
+	routingKey := fmt.Sprintf("event.%s.%s", safeType, event.Priority)
 
 	if err := p.ch.PublishWithContext(
 		ctx,

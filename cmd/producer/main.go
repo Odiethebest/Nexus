@@ -71,9 +71,10 @@ func main() {
 
 	allowedOrigins := parseAllowedOrigins(os.Getenv("LOADTEST_ALLOWED_ORIGINS"))
 	slog.Info("trusted request origins configured", "count", len(allowedOrigins))
-	wsHub := hub.New(func(r *http.Request) bool {
-		return isRequestOriginAllowed(r, allowedOrigins)
-	})
+	// WebSocket accepts all origins — browser clients connect from localhost:3000 in dev
+	// and from arbitrary origins in production (behind TLS). CORS for HTTP routes is
+	// handled separately by corsMiddleware.
+	wsHub := hub.New()
 	pub, err := broker.NewPublisher(conn)
 	if err != nil {
 		slog.Error("failed to create publisher", "err", err)
@@ -105,6 +106,7 @@ func main() {
 	mux.HandleFunc("GET /ops/loadtest/{run_id}", handleLoadtestStatus(loadtestSvc, demoLoadtestSvc))
 	mux.HandleFunc("GET /ops/loadtest/latest", handleLoadtestLatest(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
 	mux.HandleFunc("GET /ws", wsHub.ServeWS)
+	mux.HandleFunc("GET /api/metrics/summary", handleMetricsSummary(wsHub))
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -118,7 +120,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         listenAddr,
-		Handler:      withCORS(mux, allowedOrigins),
+		Handler:      corsMiddleware(mux),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -204,6 +206,13 @@ type loadtestSeriesJSON struct {
 	P95MS        [][]any `json:"p95_ms"`
 	ErrorRatePct [][]any `json:"error_rate_pct"`
 	VUs          [][]any `json:"vus"`
+}
+
+func handleMetricsSummary(h *hub.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		snapshot := metrics.ComputeSummary(h.Count())
+		writeJSON(w, http.StatusOK, snapshot)
+	}
 }
 
 func handlePublish(pub *broker.Publisher) http.HandlerFunc {
@@ -634,6 +643,19 @@ func initLoadtestService() (*loadtest.Service, error) {
 	}
 
 	return loadtest.NewService(serviceCfg, client, guard), nil
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func withCORS(next http.Handler, allowedOrigins map[string]struct{}) http.Handler {

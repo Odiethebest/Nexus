@@ -6,7 +6,7 @@ export interface Notification {
   message_id: string
   channel:    Channel
   event_type: string
-  // priority 字段 DB 暂无此列，待 migration 后启用
+  // priority field not yet in DB schema — re-enable after migration
   status:     Status
   payload:    Record<string, unknown>
   created_at: string
@@ -14,10 +14,10 @@ export interface Notification {
 
 export interface WsEvent {
   message_id: string
-  type:       string    // 后端字段名，非 event_type
+  type:       string      // NOT event_type
   priority:   Priority
   payload:    Record<string, unknown>
-  timestamp:  string    // 后端字段名，非 created_at
+  timestamp:  string      // NOT created_at
 }
 
 export interface MetricsSummary {
