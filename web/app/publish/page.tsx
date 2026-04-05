@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react"
 import { Loader2Icon } from "lucide-react"
+import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -55,14 +56,21 @@ const DEFAULT_PRIORITY: Priority    = "normal"
 const DEFAULT_PAYLOAD               = PAYLOAD_TEMPLATES[DEFAULT_EVENT_TYPE]!
 
 export default function PublishPage() {
-  // Single state object keeps eventType + payload in sync atomically —
-  // avoids the React 19 / Radix Select controlled-value race where two
-  // separate setState calls can be processed across render boundaries.
-  const [form, setForm] = useState<{ eventType: EventType; payload: string }>({
+  const router = useRouter()
+
+  // All form fields in one state object so handleSubmit always reads a
+  // consistent snapshot — prevents stale-closure bugs where priority
+  // captured at render time differs from the value when the async submit
+  // eventually reads it.
+  const [form, setForm] = useState<{
+    eventType: EventType
+    priority:  Priority
+    payload:   string
+  }>({
     eventType: DEFAULT_EVENT_TYPE,
+    priority:  DEFAULT_PRIORITY,
     payload:   DEFAULT_PAYLOAD,
   })
-  const [priority,     setPriority]     = useState<Priority>(DEFAULT_PRIORITY)
   const [payloadError, setPayloadError] = useState<string | null>(null)
   const [submitting,   setSubmitting]   = useState(false)
 
@@ -70,7 +78,7 @@ export default function PublishPage() {
 
   const handleEventTypeChange = (value: string) => {
     const et = value as EventType
-    setForm({ eventType: et, payload: PAYLOAD_TEMPLATES[et] ?? "{}" })
+    setForm(prev => ({ ...prev, eventType: et, payload: PAYLOAD_TEMPLATES[et] ?? "{}" }))
     setPayloadError(null)
   }
 
@@ -90,18 +98,18 @@ export default function PublishPage() {
 
     setSubmitting(true)
     try {
-      const body = { type: form.eventType, priority, payload: parsedPayload }
+      const body = { type: form.eventType, priority: form.priority, payload: parsedPayload }
+      console.log("[publish] priority:", form.priority)
       console.log("[publish] POST /events body:", JSON.stringify(body))
       const result = await postEvent(body)
       console.log("[publish] response:", result)
       toast.success(`Event published — message_id: ${result.message_id}`, {
         action: {
           label: "View in Live Feed →",
-          onClick: () => { window.location.href = "/live" },
+          onClick: () => router.push("/live"),
         },
       })
-      // Reset only the payload to the template for the current event type —
-      // do not reset eventType so the user stays on what they were publishing.
+      // Reset only the payload — keep eventType and priority as the user left them.
       setForm(prev => ({ ...prev, payload: PAYLOAD_TEMPLATES[prev.eventType] ?? "{}" }))
       setPayloadError(null)
     } catch (e) {
@@ -159,8 +167,8 @@ export default function PublishPage() {
                   <Button
                     type="button"
                     size="sm"
-                    variant={priority === "high" ? "default" : "outline"}
-                    onClick={() => setPriority("high")}
+                    variant={form.priority === "high" ? "default" : "outline"}
+                    onClick={() => setForm(prev => ({ ...prev, priority: "high" }))}
                     className="capitalize"
                   >
                     high
@@ -168,8 +176,8 @@ export default function PublishPage() {
                   <Button
                     type="button"
                     size="sm"
-                    variant={priority === "normal" ? "default" : "outline"}
-                    onClick={() => setPriority("normal")}
+                    variant={form.priority === "normal" ? "default" : "outline"}
+                    onClick={() => setForm(prev => ({ ...prev, priority: "normal" }))}
                     className="capitalize"
                   >
                     normal
@@ -177,8 +185,8 @@ export default function PublishPage() {
                   <Button
                     type="button"
                     size="sm"
-                    variant={priority === "low" ? "default" : "outline"}
-                    onClick={() => setPriority("low")}
+                    variant={form.priority === "low" ? "default" : "outline"}
+                    onClick={() => setForm(prev => ({ ...prev, priority: "low" }))}
                     className="capitalize"
                   >
                     low

@@ -34,17 +34,19 @@ function RelativeTime({ timestamp }: { timestamp: string }) {
 export function EventCard({ event }: { event: WsEvent }) {
   const [expanded, setExpanded] = useState(false)
   const payloadStr = JSON.stringify(event.payload, null, 2)
+  // All live events arrive via InAppWorker — the only worker that broadcasts to WS.
+  const priority = event.priority ?? "normal"
 
   return (
     <div className="rounded-lg border bg-card p-3 shadow-xs animate-in fade-in duration-300">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Badge className={channelClass[event.type?.split(".")[0]] ?? channelClass["inapp"]} variant="outline">
+          <Badge className={channelClass["inapp"]} variant="outline">
             inapp
           </Badge>
           <span className="text-sm font-medium">{event.type}</span>
-          <Badge className={priorityClass[event.priority] ?? ""} variant="outline">
-            {event.priority}
+          <Badge className={priorityClass[priority]} variant="outline">
+            {priority}
           </Badge>
         </div>
         <RelativeTime timestamp={event.timestamp} />
