@@ -20,10 +20,11 @@ export function useWebSocket() {
           //   { message_id, type, priority, payload: { ...inner... }, timestamp }
           // So we unwrap one level to get priority and the real inner payload.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((n: { message_id: string; event_type: string; payload: any; created_at: string }) => ({
+          .map((n: { message_id: string; event_type: string; channel: string; payload: any; created_at: string }) => ({
             message_id: n.message_id,
             type:       n.event_type,
             priority:   n.payload?.priority ?? 'normal',
+            channel:    n.channel,
             payload:    n.payload?.payload  ?? n.payload ?? {},
             timestamp:  n.created_at,
           }))
@@ -43,8 +44,8 @@ export function useWebSocket() {
       ws.onerror = () => ws.close()
       ws.onmessage = (e) => {
         try {
-          const event: WsEvent = JSON.parse(e.data)
-          console.log('[ws] received:', event.type, event.priority)
+          const event: WsEvent = { ...JSON.parse(e.data), channel: 'inapp' as const }
+          console.log('[ws] received:', event.type, event.priority, event.channel)
           setEvents(prev => [event, ...prev].slice(0, 100))
         } catch {}
       }

@@ -29,11 +29,11 @@ export default function LivePage() {
     setMounted(true)
   }, [])
 
-  const filtered = events.filter(e => {
-    if (channelFilter !== "all" && e.type !== channelFilter) return false
-    if (priorityFilter !== "all" && e.priority !== priorityFilter) return false
-    return true
-  })
+  console.log('[filter] channelFilter:', channelFilter, 'events with email:', events.filter(e => e.channel === 'email').length)
+
+  const filtered = events
+    .filter(e => channelFilter === "all" || e.channel === channelFilter)
+    .filter(e => priorityFilter === "all" || e.priority === priorityFilter)
 
   return (
     <SidebarProvider

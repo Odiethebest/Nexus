@@ -36,13 +36,14 @@ export function EventCard({ event }: { event: WsEvent }) {
   const payloadStr = JSON.stringify(event.payload, null, 2)
   // All live events arrive via InAppWorker — the only worker that broadcasts to WS.
   const priority = event.priority ?? "normal"
+  const channel  = event.channel  ?? "inapp"
 
   return (
     <div className="rounded-lg border bg-card p-3 shadow-xs animate-in fade-in duration-300">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Badge className={channelClass["inapp"]} variant="outline">
-            inapp
+          <Badge className={channelClass[channel] ?? channelClass["inapp"]} variant="outline">
+            {channel}
           </Badge>
           <span className="text-sm font-medium">{event.type}</span>
           <Badge className={priorityClass[priority]} variant="outline">

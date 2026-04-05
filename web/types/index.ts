@@ -16,6 +16,7 @@ export interface WsEvent {
   message_id: string
   type:       string      // NOT event_type
   priority:   Priority
+  channel?:   Channel     // optional — live WS events are always 'inapp'
   payload:    Record<string, unknown>
   timestamp:  string      // NOT created_at
 }
