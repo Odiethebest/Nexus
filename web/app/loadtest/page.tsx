@@ -2,8 +2,17 @@
 
 import React, { useEffect, useState } from "react"
 import { CheckCircleIcon, PlayIcon } from "lucide-react"
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts"
 import { AppSidebar } from "@/components/app-sidebar"
-import { ChartAreaInteractive } from "@/components/chart-area-interactive"
 import { SectionCards } from "@/components/section-cards"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
@@ -32,8 +41,8 @@ function ElapsedTimer({ running }: { running: boolean }) {
 }
 
 export default function LoadTestPage() {
-  const { status, result, error, start, reset } = useLoadTest()
-  const { latest, history, loading: metricsLoading } = useMetrics()
+  const { status, result, chartData, error, start, reset } = useLoadTest()
+  const { latest, loading: metricsLoading } = useMetrics()
 
   useEffect(() => { document.title = "Load Test — Nexus" }, [])
 
@@ -100,10 +109,64 @@ export default function LoadTestPage() {
           {/* Live metrics */}
           <SectionCards metrics={latest} loading={metricsLoading} />
 
-          {/* Throughput chart */}
-          <div className="px-4 lg:px-6">
-            <ChartAreaInteractive history={history} />
-          </div>
+          {/* Demo run throughput chart */}
+          {(running || completed) && chartData.length > 0 && (
+            <div className="px-4 lg:px-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Throughput</CardTitle>
+                  <CardDescription>
+                    RPS and P95 latency over the demo run
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                      <XAxis
+                        dataKey="t"
+                        tickFormatter={(v, i) => `${i * 2}s`}
+                        tick={{ fontSize: 11 }}
+                      />
+                      <YAxis yAxisId="rps" tick={{ fontSize: 11 }} />
+                      <YAxis yAxisId="p95" orientation="right" tick={{ fontSize: 11 }} />
+                      <Tooltip
+                        formatter={(value, name) =>
+                          name === "RPS"
+                            ? [`${value} req/s`, "RPS"]
+                            : [`${value} ms`, "P95"]
+                        }
+                        labelFormatter={(_, payload) => {
+                          if (!payload?.length) return ""
+                          const idx = chartData.findIndex(d => d.t === payload[0]?.payload?.t)
+                          return `${idx * 2}s`
+                        }}
+                      />
+                      <Legend />
+                      <Line
+                        yAxisId="rps"
+                        type="monotone"
+                        dataKey="rps"
+                        stroke="#4ade80"
+                        strokeWidth={2}
+                        dot={false}
+                        name="RPS"
+                      />
+                      <Line
+                        yAxisId="p95"
+                        type="monotone"
+                        dataKey="p95"
+                        stroke="#60a5fa"
+                        strokeWidth={2}
+                        dot={false}
+                        name="P95 (ms)"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
           {/* Results panel */}
           {completed && result && (

@@ -2,11 +2,14 @@ package metrics
 
 import (
 	"math"
+	"net/http"
+	"os"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 )
 
 // SummarySnapshot is the response body for GET /api/metrics/summary.
@@ -52,30 +55,47 @@ func (rt *rateTracker) update(current float64) float64 {
 	return rt.rate
 }
 
-var publishRate = &rateTracker{}
+var processedRate = &rateTracker{}
 
-// ComputeSummary gathers current Prometheus metric values and returns a SummarySnapshot.
+// fetchWorkerMetrics fetches and parses the Prometheus text exposition from the
+// worker's metrics endpoint (METRICS_INTERNAL_URL, default http://localhost:9091/metrics).
+func fetchWorkerMetrics() map[string]*dto.MetricFamily {
+	url := os.Getenv("METRICS_INTERNAL_URL")
+	if url == "" {
+		url = "http://localhost:9091/metrics"
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var parser expfmt.TextParser
+	mfs, err := parser.TextToMetricFamilies(resp.Body)
+	if err != nil && mfs == nil {
+		return nil
+	}
+	return mfs
+}
+
+// ComputeSummary fetches worker metrics and returns a SummarySnapshot.
 // wsCount is the number of currently connected WebSocket clients.
 func ComputeSummary(wsCount int) SummarySnapshot {
-	mfs, _ := prometheus.DefaultGatherer.Gather()
+	mfs := fetchWorkerMetrics()
 
 	var (
-		publishedTotal float64
-		deliveredTotal float64
 		processedTotal float64
+		deliveredTotal float64
 	)
 
 	// bucket accumulation for histogram p99
 	bucketCounts := make(map[float64]uint64)
 	var histTotalCount uint64
 
-	for _, mf := range mfs {
-		switch mf.GetName() {
-		case "nexus_messages_published_total":
-			for _, m := range mf.GetMetric() {
-				publishedTotal += m.GetCounter().GetValue()
-			}
-
+	for name, mf := range mfs {
+		switch name {
 		case "nexus_messages_processed_total":
 			for _, m := range mf.GetMetric() {
 				val := m.GetCounter().GetValue()
@@ -107,7 +127,7 @@ func ComputeSummary(wsCount int) SummarySnapshot {
 	}
 
 	return SummarySnapshot{
-		PublishRatePerSec:      math.Round(publishRate.update(publishedTotal)*10) / 10,
+		PublishRatePerSec:      math.Round(processedRate.update(processedTotal)*10) / 10,
 		ProcessingLatencyP99MS: histP99MS(bucketCounts, histTotalCount),
 		QueueDepth:             emptyQueueDepth(),
 		DeliverySuccessRate:    successRate,

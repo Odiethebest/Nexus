@@ -4,9 +4,15 @@ import { startLoadTest, getLoadTestLatest } from '@/lib/api'
 
 export type LoadTestStatus = 'idle' | 'running' | 'completed' | 'error'
 
+export interface LoadTestChartPoint {
+  t:   number  // unix timestamp (seconds)
+  rps: number
+  p95: number
+}
+
 export interface LoadTestResult {
-  run_id: string
-  status: LoadTestStatus
+  run_id:    string
+  status:    LoadTestStatus
   started_at: string
   completed_at?: string
   [key: string]: unknown
@@ -16,15 +22,17 @@ export interface LoadTestResult {
 const TERMINAL = new Set(['completed', 'aborted', 'error'])
 
 export function useLoadTest() {
-  const [status, setStatus]   = useState<LoadTestStatus>('idle')
-  const [result, setResult]   = useState<LoadTestResult | null>(null)
-  const [error, setError]     = useState<string | null>(null)
+  const [status,    setStatus]    = useState<LoadTestStatus>('idle')
+  const [result,    setResult]    = useState<LoadTestResult | null>(null)
+  const [chartData, setChartData] = useState<LoadTestChartPoint[]>([])
+  const [error,     setError]     = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const start = async () => {
     try {
       setStatus('running')
       setError(null)
+      setChartData([])
       console.log('[loadtest] POST /ops/loadtest/start { mode: "demo" }')
       const startResp = await startLoadTest('demo')
       console.log('[loadtest] start response:', startResp)
@@ -35,6 +43,19 @@ export function useLoadTest() {
           const runStatus = d?.run?.status ?? d?.status
           console.log('[loadtest] poll run.status:', runStatus)
           setResult(d)
+
+          // Extract chart data from series tuples: [[ts, val], ...]
+          const rpsPoints: [number, number][]  = d?.series?.rps     ?? []
+          const p95Points: [number, number][]  = d?.series?.p95_ms  ?? []
+          if (rpsPoints.length > 0) {
+            const points: LoadTestChartPoint[] = rpsPoints.map(([t, rps], i) => ({
+              t,
+              rps: Math.round(rps * 10) / 10,
+              p95: Math.round((p95Points[i]?.[1] ?? 0) * 10) / 10,
+            }))
+            setChartData(points)
+          }
+
           if (TERMINAL.has(runStatus)) {
             setStatus(runStatus === 'aborted' ? 'error' : 'completed')
             if (runStatus === 'aborted') setError('Load test was aborted')
@@ -55,10 +76,11 @@ export function useLoadTest() {
     if (pollRef.current) clearInterval(pollRef.current)
     setStatus('idle')
     setResult(null)
+    setChartData([])
     setError(null)
   }
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
-  return { status, result, error, start, reset }
+  return { status, result, chartData, error, start, reset }
 }
