@@ -58,7 +58,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavDocuments items={data.operations} label="Operations" />
       </SidebarContent>
       <SidebarFooter>
-        <div className="px-3 py-2 text-xs text-muted-foreground">Nexus — notification system</div>
+        <div className="p-4 border-t border-sidebar-border">
+          <p className="text-xs text-muted-foreground">
+            by{" "}
+            <a
+              href="https://odieyang.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-foreground underline underline-offset-2 hover:text-primary transition-colors"
+            >
+              Odie Yang
+            </a>
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">All rights reserved.</p>
+        </div>
       </SidebarFooter>
     </Sidebar>
   )
