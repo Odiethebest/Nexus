@@ -199,7 +199,7 @@ For full instructions, see [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
 - [Local Development Runbook](./docs/RUN_LOCAL.md)
 - [Deployment Guide](./docs/DEPLOYMENT.md)
 - [Environment Variable Reference](./docs/ENVIRONMENT.md)
-- [Repository Structure](./structure.md)
+- [Repository Structure](docs/STRUCTURE.md)
 
 ---
 
