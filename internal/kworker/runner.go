@@ -205,9 +205,11 @@ func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 		}
 	}
 
-	// Idempotency check — Redis SETNX with 24h TTL. Second time this
-	// msg_id shows up (worker restart, retry), we skip and commit.
-	ok, err := r.Idempotency.Check(ctx, msgID)
+	// Idempotency check — Redis SETNX with 24h TTL, scoped per channel so
+	// a fan-out event correctly persists once per channel. Second time
+	// the same (channel, msg_id) shows up (worker restart, retry), we
+	// skip and commit.
+	ok, err := r.Idempotency.CheckScoped(ctx, channelLabel, msgID)
 	if err != nil {
 		r.Log.Error("idempotency check failed", "msg_id", msgID, "err", err)
 		// Don't commit — let a later poll retry this record.
