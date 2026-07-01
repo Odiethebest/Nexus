@@ -96,7 +96,11 @@ func main() {
 		pub          eventPublisher
 		kafkaPub     *kbroker.Publisher
 		amqpPub      *broker.Publisher
+		lagReader    *kbroker.LagReader
 	)
+	// Root context so background samplers (lag reader) stop when SIGTERM fires.
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
 	if useKafka {
 		kcfg, err := kbroker.LoadConfig()
 		if err != nil {
@@ -119,6 +123,17 @@ func main() {
 		kafkaPub = kp
 		pub = kp
 		slog.Info("publisher backend", "impl", "kafka", "brokers", kcfg.Brokers, "partitions", kcfg.TopicPartitions)
+
+		// Lag reader pushes consumer-lag + DLQ gauges into Prometheus every
+		// 3s. Runs on the producer so the summary handler can read them
+		// from the local registry without cross-service scraping.
+		lr, err := kbroker.NewLagReader(kcfg, slog.Default())
+		if err != nil {
+			slog.Warn("kafka lag reader disabled", "err", err)
+		} else {
+			lagReader = lr
+			go lagReader.Run(rootCtx, 3*time.Second)
+		}
 	} else {
 		p, err := broker.NewPublisher(conn)
 		if err != nil {
@@ -219,6 +234,10 @@ func main() {
 		if err := kafkaPub.Close(ctx); err != nil {
 			slog.Warn("kafka publisher close", "err", err)
 		}
+	}
+	rootCancel()
+	if lagReader != nil {
+		lagReader.Close()
 	}
 	slog.Info("producer shut down")
 }

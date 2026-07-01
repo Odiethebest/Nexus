@@ -135,7 +135,22 @@
 
 ### Step 4 — 真实 consumer lag / DLQ 指标 + 修复 metrics summary
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- 新增 `internal/kbroker/lag.go`:`LagReader` 用 `kadm.Client` 每 3s 采样:
+  - 每 lane 的 (end offset − committed offset) → `nexus_consumer_lag_records{channel,priority}` gauge;
+  - 每 DLQ topic 的 end offset → `nexus_dlq_messages_total{channel,priority}` gauge。
+  - 独立 kgo client 避免和 publisher 的关闭顺序耦合。`kerr.GroupIDNotFound` 静默(新集群 group 还没提交过 offset 时正常)。
+- `cmd/producer/main.go`:USE_KAFKA=true 时起后台 goroutine 跑 `LagReader.Run`。用 `rootCtx` 控制生命周期,SIGTERM 时 `rootCancel()` 结束采样。差异:计划里没细化 lag reader 跑在哪个服务;这里放在 producer 是因为 summary handler 也在 producer,读本地 Prometheus registry 就能拿数据,不用跨服务 scrape。
+- `internal/metrics/summary.go` 重写为:
+  - 同时 gather 本地 registry(producer 侧计数)+ remote worker scrape,`mergeMetricFamilies` 本地覆盖同名。
+  - `PublishRatePerSec` 改用 `nexus_events_published_total`(修复原来"publish 用 processed 数硬凑"的名义混淆);新增 `ProcessedRatePerSec` 字段独立呈现。
+  - `QueueDepth` 从 `nexus_consumer_lag_records` gauge 读取(替换硬编码 0);缺失 lane 会 backfill 0 保持字段稳定。
+  - `DLQCount` 从 `nexus_dlq_messages_total` 汇总(替换硬编码 0)。
+  - 新增 `E2ELagP99Seconds`:从 `nexus_event_e2e_lag_seconds` histogram 取 p99。**这是简历 "lag < 1.5s" 直接对应的字段**。
+- `internal/metrics/summary_test.go`:测 mergeMetricFamilies 冲突时 local 胜出 + histP99Sec 插值。
+- `go build ./... && go test ./...` 全绿。
 
 **改动**
 - 新增 `internal/kbroker/lag.go`:后台 goroutine(3s 周期),用 `kadm.Client` 拉:
