@@ -1,0 +1,15 @@
+apiVersion: 1
+
+# Grafana dashboards provider — loads every JSON under
+# /etc/grafana/provisioning/dashboards so both the legacy dashboard.json
+# and the new nexus-kafka.json under dashboards/ show up.
+providers:
+  - name: nexus-dashboards
+    folder: Nexus
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -272,7 +272,24 @@
 
 ### Step 8 — Docker Compose 换 Redpanda
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- `deploy/docker-compose.yml`:
+  - 去掉 `rabbitmq` service;
+  - 加 `redpanda`(镜像 `docker.redpanda.com/redpandadata/redpanda:v24.2.5`,`--mode=dev-container` + `--smp=1 --memory=1G`,KRaft 单节点。listener 分 internal(`redpanda:9092`,给 producer/worker)和 external(`localhost:19092`,给主机 `rpk`)。健康检查用 `rpk cluster health --exit-when-healthy`。Admin API `9644` 顺带暴露)。
+  - `producer` / `worker` 环境切成 `KAFKA_BROKERS=redpanda:9092`,加 `KAFKA_TOPIC_PARTITIONS=12` / `KAFKA_REPLICATION_FACTOR=1`;`producer` 加 `METRICS_INTERNAL_URL=http://worker:9091/metrics` 让 summary handler 跨服务拿 worker 指标。
+  - Grafana 挂 dashboards provider(`deploy/grafana/dashboards.yml`)+ `dashboards/` 目录,允许多张 dashboard。
+- `deploy/prometheus.yml` 加一个 `redpanda` scrape job(`redpanda:9644/public_metrics`,broker 侧 partition / ISR 指标)。
+- 新增 `deploy/grafana/dashboards/nexus-kafka.json` — 一张对齐简历 4 条 bullet 的 dashboard:
+  - Consumer lag by lane(records gauge)
+  - **End-to-end lag p99 seconds**(带 1.5s 阈值线,直接对应简历口径)
+  - DLQ backlog by lane
+  - **Cache hit rate scope=by_id**(带 0.95 阈值线)
+  - Three-stage p99(ingest/processing/delivery,带 50ms 阈值线)
+  - Publish/Processed rate + success rate + total DLQ 单值面板
+- 用 `docker compose config --quiet` 验证 YAML 语法通过。未实际 `up`(留到 Step 10 loadtest 环节一起跑)。
+- 差异:计划里备注可选加 broker `/metrics` scrape,实际加了(Redpanda 的 Public Metrics 有用,几乎无成本)。
 
 **改动**
 - `deploy/docker-compose.yml`:

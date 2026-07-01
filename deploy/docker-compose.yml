@@ -1,17 +1,34 @@
 services:
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
+  # Redpanda (Kafka-protocol) — single-node KRaft. Chosen over Apache
+  # Kafka + ZK for local dev because it boots in ~3s and needs one
+  # container. Wire-compatible with any Kafka client (franz-go here).
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.5
+    command:
+      - redpanda
+      - start
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
     ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      # 19092 is the "external" listener for host tools (rpk, kaf, etc.).
+      # In-cluster services use redpanda:9092.
+      - "19092:19092"
+      # Admin API (topic auto-create introspection, metrics passthrough).
+      - "9644:9644"
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
+      test: ["CMD-SHELL", "rpk cluster health --exit-when-healthy"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
 
   redis:
     image: redis:7-alpine
@@ -48,12 +65,15 @@ services:
     ports:
       - "8080:8080"
     environment:
-      AMQP_URL: amqp://guest:guest@rabbitmq:5672/
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_TOPIC_PARTITIONS: "12"
+      KAFKA_REPLICATION_FACTOR: "1"
       REDIS_URL: redis://redis:6379
       POSTGRES_DSN: postgres://nexus:nexus@postgres:5432/nexus?sslmode=disable
+      METRICS_INTERNAL_URL: http://worker:9091/metrics
       LISTEN_ADDR: ":8080"
     depends_on:
-      rabbitmq:
+      redpanda:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -67,14 +87,16 @@ services:
     env_file:
       - ../.env
     environment:
-      AMQP_URL: amqp://guest:guest@rabbitmq:5672/
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_TOPIC_PARTITIONS: "12"
+      KAFKA_REPLICATION_FACTOR: "1"
       REDIS_URL: redis://redis:6379
       POSTGRES_DSN: postgres://nexus:nexus@postgres:5432/nexus?sslmode=disable
       EMAIL_WORKER_POOL: "10"
       INAPP_WORKER_POOL: "5"
       WEBHOOK_WORKER_POOL: "8"
     depends_on:
-      rabbitmq:
+      redpanda:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -103,7 +125,9 @@ services:
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/nexus.json
     volumes:
       - ./grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/provider.yml:ro
       - ./grafana/dashboard.json:/etc/grafana/provisioning/dashboards/nexus.json:ro
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards/dashboards:ro
       - grafana_data:/var/lib/grafana
     depends_on:
       - prometheus

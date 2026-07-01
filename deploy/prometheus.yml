@@ -12,3 +12,11 @@ scrape_configs:
     static_configs:
       - targets: ["worker:9091"]
     metrics_path: /metrics
+
+  # Redpanda ships Prometheus-format metrics on the admin port. Useful for
+  # broker-side visibility (partition counts, ISR health) alongside our
+  # own consumer-lag gauges.
+  - job_name: redpanda
+    static_configs:
+      - targets: ["redpanda:9644"]
+    metrics_path: /public_metrics
