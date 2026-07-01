@@ -65,19 +65,20 @@ This repository is inspired by — and partially draws on themes from — a proj
 flowchart LR
   C[Clients] -->|HTTP / gRPC| P(Producer<br/>cmd/producer)
   P -->|Publish fan-out<br/>acks=all + idempotent| K{{Redpanda<br/>Kafka protocol}}
-  K --> EH[nexus.email.high/normal/low]
-  K --> IH[nexus.inapp.high/normal/low]
-  K --> WH[nexus.webhook.high/normal/low]
+  K --> EH["nexus.email.high | normal | low"]
+  K --> IH["nexus.inapp.high | normal | low"]
+  K --> WH["nexus.webhook.high | normal | low"]
   EH --> W(Worker<br/>cmd/worker)
   IH --> W
   WH --> W
   W -->|SaveNotification| PG[(PostgreSQL)]
-  W -->|SETNX msg:channel:id| R[(Redis)]
-  W -.retry-w-backoff.-> K
-  W -.permanent fail.-> DLQ[nexus.dlq.<ch>.<pri>]
-  P -->|Cache-aside<br/>GET /notifications/{id}| R
+  W -->|"SETNX msg:channel:id"| R[(Redis)]
+  W -.retry-with-backoff.-> K
+  W -.permanent fail.-> DLQ["nexus.dlq.channel.priority"]
+  P -->|"Cache-aside GET /notifications/:id"| R
   P -.->|LagReader kadm 3s| K
-  P & W -->|/metrics| PROM[Prometheus]
+  P -->|/metrics| PROM[Prometheus]
+  W -->|/metrics| PROM
   PROM --> GRAF[Grafana dashboard]
 ```
 
