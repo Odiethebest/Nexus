@@ -6,3 +6,21 @@ dockerfilePath = "deploy/Dockerfile.producer"
 startCommand = "/app/producer"
 healthcheckPath = "/health"
 healthcheckTimeout = 300
+# Railway's default deploy strategy is rolling — new instance boots and
+# passes healthcheck before the old one is killed. Consumer-group
+# rebalance handles the handoff; RUNBOOK.md documents how to observe
+# it via nexus_event_e2e_lag_seconds p99.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Environment variables (set these in the Railway dashboard):
+#   KAFKA_BROKERS         (e.g. seed.example.redpanda.cloud:9092)
+#   KAFKA_SASL_MECHANISM  = SCRAM-SHA-256
+#   KAFKA_SASL_USER       (Redpanda Cloud user)
+#   KAFKA_SASL_PASS       (Redpanda Cloud password)
+#   KAFKA_TLS             = true
+#   KAFKA_TOPIC_PARTITIONS = 12
+#   KAFKA_REPLICATION_FACTOR = 3   (Redpanda Cloud runs 3-node dev clusters)
+#   POSTGRES_DSN          (Railway PostgreSQL plugin)
+#   REDIS_URL             (Railway Redis plugin)
+#   METRICS_INTERNAL_URL  (http://<worker-private-domain>:9091/metrics)

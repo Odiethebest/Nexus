@@ -311,7 +311,14 @@
 
 ### Step 9 — Railway + Redpanda Cloud 部署配置
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- `deploy/railway.toml`(producer)/ `deploy/railway.worker.toml`:两个 toml 加 restart policy 和一段 env 说明注释,列出 Redpanda Cloud 需要的所有变量(`KAFKA_BROKERS` / `KAFKA_SASL_MECHANISM=SCRAM-SHA-256` / `KAFKA_SASL_USER` / `KAFKA_SASL_PASS` / `KAFKA_TLS=true` / `KAFKA_TOPIC_PARTITIONS=12` / `KAFKA_REPLICATION_FACTOR=3`)。
+- 代码侧不需要改:`internal/kbroker/config.go` 在 Step 1 就已经把 `KAFKA_TLS` / `KAFKA_SASL_*` 加进来了,franz-go 用 SCRAM + TLS 直接就能连。
+- 零停机滚动的验证方法:Railway 默认 rolling(新实例过 healthcheck → 老实例 SIGTERM);consumer group 自动 rebalance,`BlockRebalanceOnPoll` 保证只在 poll 间隙 revoke。写进 `railway.worker.toml` 顶部的注释块,同一段思路也进 RUNBOOK(Step 11)。
+- 实际 Railway 部署留给用户手动做(需要 Redpanda Cloud 账号 + 现有 Railway 项目),文档已经够了。
+- 无 Go 代码变化;`go build ./...` 无影响。
 
 **改动**
 - `deploy/railway.toml` / `deploy/railway.worker.toml`:加环境变量占位 `KAFKA_BROKERS`、`KAFKA_SASL_USER`、`KAFKA_SASL_PASS`、`KAFKA_TLS=true`;Publisher / kbroker 支持 SASL_SSL(franz-go 用 `kgo.SASL(scram.Auth{...}.AsSha256Mechanism())` + `kgo.DialTLSConfig(...)`)。
