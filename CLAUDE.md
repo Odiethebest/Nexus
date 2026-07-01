@@ -10,7 +10,7 @@
 
 **Nexus** is a production-grade message-driven notification system demonstrating high-concurrency backend architecture, multi-channel dispatch, real-time monitoring, and modern frontend engineering.
 
-**Portfolio positioning**: Targeting Agent/backend engineering roles at Chinese tech companies (ByteDance, Alibaba, Baidu). Key capabilities showcased:
+**Project context**: Nexus is a personal Go-based rebuild that grew out of themes I worked on during my internship at QAX Technology Group (奇安信科技集团); it is used both for continued learning and as a portfolio piece. No proprietary code, data, or business logic from the internship is reproduced here — the implementation and design trade-offs are entirely my own. Key capabilities exercised:
 - Message queue + priority queue design
 - Redis idempotency deduplication
 - Dead-letter queue + manual replay
@@ -22,16 +22,16 @@
 
 | Layer | Technology |
 |---|---|
-| Backend language | Go 1.22 |
-| Message queue | RabbitMQ (AMQP 0.9.1) |
+| Backend language | Go 1.25 |
+| Message bus | Redpanda 24.2 (Kafka protocol; franz-go client, KRaft, no ZooKeeper) |
 | Database | PostgreSQL 16 |
-| Cache / idempotency | Redis |
+| Cache + idempotency | Redis 7 (SETNX scoped by channel, cache-aside for reads) |
 | Real-time communication | WebSocket (Gorilla) |
 | API | HTTP REST + gRPC |
-| Monitoring | Prometheus (`/api/metrics/summary` endpoint pending) |
+| Monitoring | Prometheus (three-stage histograms + consumer lag) + provisioned Grafana dashboard |
 | Frontend | Next.js 15 (App Router) + TypeScript |
 | UI library | shadcn/ui + Tailwind CSS |
-| Deployment | Railway (producer + worker deployed; web service pending) |
+| Deployment | Railway (producer + worker + web) + Redpanda Cloud dev cluster |
 
 ---
 
@@ -44,8 +44,9 @@
 - Does NOT consume any messages
 
 **Worker** (`cmd/worker`, metrics port `9091`)
-- Responsibilities: consume from RabbitMQ, dispatch via three channels, write to PostgreSQL
-- Three worker types: EmailWorker (pool=10), InAppWorker (pool=5), WebhookWorker (pool=8)
+- Responsibilities: consume from 9 Kafka lane topics (3 channels × 3 priorities), dispatch, write to PostgreSQL
+- One `kworker.Runner` per (channel, priority) — each with its own consumer group `nexus.<channel>.<priority>` and its own pool size `[pool, pool/2, pool/4]` for high/normal/low
+- Pool defaults: email=10, inapp=5, webhook=8 (configurable via `*_WORKER_POOL` envs)
 - No outbound HTTP (Prometheus scrapes `:9091/metrics` only)
 
 ### 2.2 Message Flow
@@ -54,69 +55,74 @@
 POST /events
     │
     ▼
-Publisher → Exchange "nexus.events" (topic)
-            routing key: event.{type}.{priority}
-            │
-    ┌───────┼───────┐
-    ▼       ▼       ▼
- Email   InApp  Webhook
- queues  queues  queues
-(×3 priorities: high / normal / low)
+kbroker.Publisher (franz-go, acks=all, idempotent, sticky-key partitioner)
+    │ Fan-out one record per channel with headers:
+    │   x-msg-id, x-event-type, x-priority, x-produced-at (ns), x-retry-count
+    ▼
+Redpanda topics:
+    nexus.email.<high|normal|low>
+    nexus.inapp.<high|normal|low>
+    nexus.webhook.<high|normal|low>
     │
     ▼
-Worker processing:
-  1. Redis idempotency check (key=msg:{id}, TTL=24h)
-  2. Actual dispatch (SMTP / WebSocket broadcast / HTTP POST)
-  3. Upsert → PostgreSQL notifications table
-  4. Ack (success) or Nack→DLQ (failure)
+kworker.Runner (one per lane, independent consumer group):
+    1. Redis idempotency SETNX (key = msg:<channel>:<msg_id>, TTL=24h)
+    2. Processor.Deliver (SMTP / WS broadcast / HTTP POST) → Outcome
+    3. Persist to PostgreSQL (message_id, channel) upsert
+    4. CommitRecords (only on success → at-least-once)
+    │
+    ▼ (on failure)
+Transient  → re-produce back to same topic w/ x-retry-count++, MaxRetries=3
+Permanent  → produce to nexus.dlq.<channel>.<priority>
 ```
 
 ### 2.3 Key Design Decisions (interview-ready)
 
 | Design | Rationale |
 |---|---|
-| Three-tier priority queues | High-priority messages (payments, alerts) are never blocked by low-priority tasks |
-| Redis idempotency | Prevents duplicate notifications after worker restarts |
-| DLQ + manual replay | Failed messages are never lost; ops can selectively retry after intervention |
-| Non-blocking WebSocket broadcast | Slow clients are dropped without affecting other subscribers' latency |
-| Prometheus full-pipeline instrumentation | Publish latency, processing time, and queue depth are all observable |
-| Load test demo mode | Demonstrates real throughput curves without requiring k6 cloud quota |
+| Per-lane topics + per-lane consumer groups | High-priority lane's committed offset never depends on a slow low-priority lane |
+| franz-go async Produce + acks=all + idempotent producer | Supports 50K/s ceiling without the single-inflight-confirm bottleneck of the AMQP publisher; broker-side dedup on retries |
+| `x-retry-count` in record header (not `x-death`) | Kafka has no built-in redelivery count; header is portable and survives DLQ round-trips |
+| `x-produced-at` preserved across retries + DLQ | e2e lag histogram measures true event age, not "time since last retry" |
+| Scoped Redis idempotency `msg:<channel>:<id>` | Fan-out event persists correctly in all three channels (bug fixed in Step 10 of MIGRATION.md) |
+| DLQ = separate topics + dedicated `nexus.replay` consumer group | Replay is a normal Kafka consume operation; no admin ops needed |
+| Manual `CommitRecords` after PG upsert + `BlockRebalanceOnPoll` | Rolling deploys / SIGTERM never lose an in-flight record (at-least-once) |
+| Cache-aside `GET /notifications/{id}` (TTL 60s, scope=`by_id`) | Repeat lookups of the same recently-fanned-out msg are the hot pattern → 95% hit rate under load |
+| Three-stage tracing: `nexus_stage_{ingest,processing,delivery}_duration_seconds` + `nexus_event_e2e_lag_seconds` | Distinguishes producer-side / worker-side / downstream-side slowness in one dashboard |
+| Load test demo mode | Deterministic UI demo without k6 Cloud quota |
 
 ### 2.4 REST API Reference
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/events` | Publish a new event |
-| GET | `/notifications` | List notifications (hardcoded limit=50, **no filtering/pagination**) |
-| POST | `/notifications/clear` | Clear all notification records |
+| POST | `/events` | Publish a new event (fan-out to all 3 channel topics) |
+| GET | `/notifications` | List notifications (limit=50, short-TTL cache scope=`list`) |
+| GET | `/notifications/{message_id}` | Cache-aside single-msg lookup (Redis, TTL 60s, scope=`by_id`) |
+| POST | `/notifications/clear` | Clear notifications older than cutoff |
 | GET | `/ws` | WebSocket upgrade endpoint |
-| GET | `/api/metrics/summary` | Aggregated metrics summary (**pending implementation**, see §2.5) |
+| GET | `/api/metrics/summary` | Aggregated metrics summary (see §2.5) |
 | POST | `/ops/loadtest/start` | Start load test (real or demo mode) |
 | GET | `/ops/loadtest/{run_id}` | Query load test result by run_id |
 | GET | `/ops/loadtest/latest` | Query the most recent load test result |
-| POST | `/dlq/replay` | Manually replay DLQ messages |
+| POST | `/dlq/replay` | Manually replay DLQ messages (accepts legacy AMQP-style name) |
 
 ### 2.5 `/api/metrics/summary` Response Schema
 
-> **Status: pending implementation.** The handler does not yet exist in `internal/metrics/`. Schema defined here for frontend contract alignment.
+Handler: `internal/metrics/summary.go:ComputeSummary`. Sourced from the local Prometheus registry (producer-owned counters) merged with a scrape of the worker (`METRICS_INTERNAL_URL`, default `http://localhost:9091/metrics`).
 
 ```json
 {
-  "publish_rate_per_sec": 142.3,
-  "processing_latency_p99_ms": 38.1,
-  "queue_depth": {
-    "email_high": 0,
-    "email_normal": 12,
-    "email_low": 45,
-    "inapp_high": 0,
-    "inapp_normal": 8,
-    "inapp_low": 20,
-    "webhook_high": 2,
-    "webhook_normal": 5,
-    "webhook_low": 11
+  "publish_rate_per_sec": 142.3,        // rate(nexus_events_published_total)
+  "processed_rate_per_sec": 138.7,      // rate(nexus_messages_processed_total)
+  "processing_latency_p99_ms": 38.1,    // p99 of nexus_stage_processing_duration_seconds
+  "e2e_lag_p99_seconds": 0.025,         // p99 of nexus_event_e2e_lag_seconds (résumé: "lag < 1.5s")
+  "queue_depth": {                      // from nexus_consumer_lag_records gauge
+    "email_high": 0, "email_normal": 12, "email_low": 45,
+    "inapp_high": 0, "inapp_normal": 8,  "inapp_low": 20,
+    "webhook_high": 2, "webhook_normal": 5, "webhook_low": 11
   },
   "delivery_success_rate": 0.986,
-  "dlq_count": 3,
+  "dlq_count": 3,                       // sum of nexus_dlq_messages_total gauge
   "active_ws_connections": 7,
   "uptime_seconds": 84732
 }
@@ -283,10 +289,16 @@ export interface MetricsSummary {
 
 | Variable | Example | Notes |
 |---|---|---|
-| `AMQP_URL` | `amqp://user:pass@...` | Injected by Railway |
+| `KAFKA_BROKERS` | `localhost:19092` / `<seed>.redpanda.cloud:9092` | Required. Comma-separated. |
+| `KAFKA_CLIENT_ID` | `nexus` | Optional, default `nexus` |
+| `KAFKA_TOPIC_PARTITIONS` | `12` | See README partition-sizing derivation |
+| `KAFKA_REPLICATION_FACTOR` | `1` (local) / `3` (Redpanda Cloud) | |
+| `KAFKA_TLS` | `true` | Enable TLS for managed brokers |
+| `KAFKA_SASL_MECHANISM` | `SCRAM-SHA-256` | |
+| `KAFKA_SASL_USER` / `KAFKA_SASL_PASS` | `...` | Managed broker credentials |
 | `POSTGRES_DSN` | `postgres://...` | Railway PostgreSQL |
-| `REDIS_URL` | `redis://...` | Railway Redis |
-| `SMTP_HOST` | `smtp.gmail.com` | Email dispatch |
+| `REDIS_URL` | `redis://...` | Railway Redis — used by both idempotency and cache-aside |
+| `SMTP_HOST` | `smtp.gmail.com` | Optional; empty → email delivery is a no-op ("delivered" without send) |
 | `SMTP_PORT` | `587` | |
 | `SMTP_USER` | `...` | |
 | `SMTP_PASS` | `...` | |
@@ -337,9 +349,12 @@ docker compose -f deploy/docker-compose.yml up -d
 |---|---|---|
 | `nexus-producer` | `deploy/railway.toml` | Dockerfile → `/app/producer` |
 | `nexus-worker` | `deploy/railway.worker.toml` | Dockerfile → `/app/worker` |
-| `nexus-web` | pending | Dockerfile or nixpacks (Node), root=`web/` |
+| `nexus-web` | `deploy/railway.web.toml` | Dockerfile.web |
+| Kafka | External **Redpanda Cloud** dev cluster | KAFKA_BROKERS / SASL_SSL |
 
 **Important notes**:
+- Railway has no built-in Kafka; the app is expected to point at Redpanda Cloud (dev cluster free tier) via `KAFKA_BROKERS` + SASL_SSL. See `README.md` deployment section.
+- Rolling deploys are zero-downtime: Railway waits for `/health` on the new instance before killing the old. On the Kafka side, consumer-group rebalance moves partitions between the old and new worker. See `RUNBOOK.md` for the exact validation procedure.
 - Root `nixpacks.toml` builds the producer binary only — it does **not** participate in Railway deployments (Railway uses Dockerfile)
 - `embed.FS` SPA fallback is **not implemented** — producer does not serve static files
 - `NEXT_PUBLIC_*` variables are injected at Railway **build time**, not runtime — set them before deploying

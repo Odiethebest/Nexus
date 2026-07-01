@@ -376,7 +376,24 @@
 
 ### Step 11 — 文档(README、RUNBOOK、CLAUDE.md)
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- `README.md`:
+  - Badges 换 Redpanda 24.2 / Go 1.25;把 Overview 里的 "What It Handles" 表整个替换,加了 idempotency scoped by channel、three-stage tracing、cache-aside、consumer at-least-once mechanics 等条目。
+  - Architecture 换成 mermaid 图(9 lane topics + DLQ + LagReader + Cache-aside 路径都画出来),用文字说明"独立 group per lane"的语义保证。
+  - 新增 **Partition sizing** 章节,保留 D 修正里的原文推导:"目标吞吐 ÷ 单 partition 吞吐(经验值 5–10K msg/s)+ 30% 余量 → 12 partition 覆盖 50K/s"。
+  - API 表加 `GET /notifications/{message_id}`;Getting Started 从 `rabbitmq redis postgres` 换成 `redpanda redis postgres`,加 `rpk topic list` 之类的排错命令。
+  - Deployment 加 Redpanda Cloud env 表 + 零停机滚动更新说明。
+  - Documentation 索引置顶挂 MIGRATION.md 和 RUNBOOK.md。
+- 新增 `RUNBOOK.md`:主体是 4 张对照表,一条 bullet 一张,每一行 `Claim → Code location → How to verify → Measured on local`。**实测数字全部填入**(150/s、p99 13.3ms、e2e lag p99 24.7ms、cache 95.13%、rolling restart 2999/2999/2999 + lag 395ms)。末尾附一份"快速故障演练"表和"Grafana 面板 ↔ bullet"表。
+- `CLAUDE.md`:
+  - Tech stack 表 AMQP → Redpanda + Kafka client (franz-go)。
+  - §2.2 Message Flow 换成 Kafka 版流程图(fan-out publisher / headers / lane runners / retry + DLQ)。
+  - §2.3 Key Design Decisions 大改:每一条都对应新架构决策(per-lane group、franz-go async、header retry counter、preserved produced_at、scoped idempotency、cache-aside、three-stage tracing)。
+  - §2.4 API 表加 `GET /notifications/{id}`;§2.5 Summary schema 加 `processed_rate_per_sec` / `e2e_lag_p99_seconds` 字段。
+  - §5 env 表整段换成 Kafka 变量;§7 deployment 说明 Redpanda Cloud + 零停机滚动。
+- MIGRATION.md 结尾状态表 4 条 bullet 都填了实测数字 + Grafana 面板名。
 
 **改动**
 - `README.md`:
@@ -401,9 +418,9 @@
 
 | # | Bullet | 关联步骤 | 状态 | 实测数字 / 面板 |
 |---|---|---|---|---|
-| 1 | Go + Kafka message-driven pipeline;50K/s 目标(k6 Cloud);p99<50ms;lag<1.5s;partition tuning + consumer group scaling | Step 1–4, 8, 10, 11 | ⏳ 未开始 | 本机 RPS: — / p99: — / e2e lag p99: — s |
-| 2 | Redis cache-aside + PostgreSQL 持久化;负载下 by_id 命中率 95% | Step 6, 10, 11 | ⏳ 未开始 | 命中率 by_id: — |
-| 3 | 幂等消费 + retry-with-backoff + DLQ + graceful shutdown = at-least-once | Step 3, 5, 7 | ⏳ 未开始 | DLQ 演示: — / rebalance drain: — |
-| 4 | 端到端三阶段延迟追踪(ingest / processing / delivery)+ Railway 零停机滚动 | Step 2, 3, 4, 9, 11 | ⏳ 未开始 | Grafana 面板: — |
+| 1 | Go + Kafka message-driven pipeline;50K/s 目标(k6 Cloud);p99<50ms;lag<1.5s;partition tuning + consumer group scaling | Step 1–4, 8, 10, 11 | ✅ 可复现 | 本机 stable **150/s**(peak burst 940/s,如实记录)/ Publish p99 **13.3ms** / e2e lag p99 **24.7ms(0.025s)**;12 partitions × 9 lane topics × 9 独立 consumer group;面板 **Nexus — Kafka pipeline → Consumer lag + E2E lag p99 + Three-stage p99**。50K/s 是 k6 Cloud 目标,未在本机跑。 |
+| 2 | Redis cache-aside + PostgreSQL 持久化;负载下 by_id 命中率 95% | Step 6, 10, 11 | ✅ 可复现 | `by_id` **95.13%**(150/s + read-ratio=20,over-window 计数);miss counter / hit counter 分 scope 独立;面板 **Cache hit rate — scope=by_id**(带 0.95 阈值线)。 |
+| 3 | 幂等消费 + retry-with-backoff + DLQ + graceful shutdown = at-least-once | Step 3, 5, 7, 10 | ✅ 可复现 | Rolling restart under 100/s load:三 channel 各 **2999/2999/2999** rows(零丢失);rebalance 期间 e2e lag p99 **395ms**(<1.5s);DLQ replay 通过 `POST /dlq/replay {"queue":"nexus.dlq.<ch>.<pri>","max":N}` 手动跑通(RUNBOOK 有命令)。 |
+| 4 | 端到端三阶段延迟追踪(ingest / processing / delivery)+ Railway 零停机滚动 | Step 2, 3, 4, 9, 11 | ✅ 可复现 | Prom 三 histogram:`nexus_stage_{ingest,processing,delivery}_duration_seconds` + `nexus_event_e2e_lag_seconds`;面板 **Three-stage latency p99 (ms)**(带 50ms 阈值线)。Railway 零停机通过 `docker compose restart worker` 代理演示(consumer group rebalance handoff);Railway 端配置文档在 `railway.worker.toml` 顶部注释块 + README Deployment 章节。 |
 
 > 状态图例:⏳ 未开始 / 🚧 进行中 / ✅ 可复现
