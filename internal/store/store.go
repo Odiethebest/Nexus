@@ -99,6 +99,33 @@ func (s *Store) ListNotifications(ctx context.Context, limit int) ([]Notificatio
 	return result, rows.Err()
 }
 
+// GetByMessageID returns every persisted delivery row for a single
+// message_id, one per channel it was fanned out to. The result is small
+// (at most 3 rows in the current design) so callers can cache it whole
+// under cache:notif:{id}.
+func (s *Store) GetByMessageID(ctx context.Context, messageID string) ([]Notification, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT message_id, channel, event_type, status, payload, created_at
+		FROM notifications
+		WHERE message_id = $1
+		ORDER BY channel
+	`, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("store: get by message_id: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Notification
+	for rows.Next() {
+		var n Notification
+		if err := rows.Scan(&n.MessageID, &n.Channel, &n.EventType, &n.Status, &n.Payload, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // ClearNotificationsBefore deletes notifications created at or before the
 // provided cutoff time and returns the number of deleted rows.
 func (s *Store) ClearNotificationsBefore(ctx context.Context, before time.Time) (int64, error) {

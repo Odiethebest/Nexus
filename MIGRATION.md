@@ -205,7 +205,21 @@
 
 ### Step 6 — Cache-aside 读路径(by_id 主 + list 短 TTL 辅)
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- 新增 `internal/notifcache/cache.go`:
+  - `Cache.GetByMessageID(ctx, id)` — 主路径:先 Redis `GET cache:notif:{id}` → hit 反序列化返回 + bump `nexus_cache_hits_total{scope="by_id"}`;miss → PG 查(新增 `store.Store.GetByMessageID`)→ 回填 TTL 60s + bump `nexus_cache_misses_total{scope="by_id"}`。
+  - `Cache.ListNotifications(ctx, limit)` — 辅助:key `cache:notif:list:v1:{limit}`,TTL 2s,scope="list"。命中率主要口径不看这个。
+  - Redis 出错(非 `redis.Nil`)直接 propagate;回填失败静默(下次继续 miss,不会破坏读)。
+- `internal/store/store.go`:新增 `GetByMessageID(ctx, id)`,按 `message_id` 拉全部 channel 行(current fan-out 后每 msg 最多 3 行),按 channel 排序保证缓存一致。
+- `internal/metrics/metrics.go`:新增 `nexus_cache_hits_total{scope}` / `nexus_cache_misses_total{scope}` counter vec。
+- `cmd/producer/main.go`:producer 侧新增 Redis 连接(以前只 worker 用),构造 `notifcache.Cache`。路由:
+  - `GET /notifications/{message_id}` → `handleGetNotification`(**新的 cache-aside 主入口**)
+  - `GET /notifications` → 改走 cache(短 TTL)
+- `internal/notifcache/cache_test.go`:用 miniredis 验证 by_id 命中 counter +1、list 命中 counter +1(不需要真 PG)。
+- 差异:计划 Step 6 里的 "Loadtest client 增加读流量" 挪到 **Step 10**,因为 repo 目前没有原地的流量生成器(`internal/loadtest/` 是 k6 Cloud orchestration);Step 10 会用 Go native 客户端写一个,顺手打读接口。已在 Step 10 描述里记录。
+- `go build ./... && go test ./...` 全绿。
 
 **改动**
 - 新增 handler `GET /notifications/{message_id}`(cmd/producer/main.go 注册路由):

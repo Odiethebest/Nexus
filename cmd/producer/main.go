@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"nexus/internal/broker"
 	"nexus/internal/envutil"
 	"nexus/internal/grpcserver"
@@ -26,6 +27,7 @@ import (
 	"nexus/internal/kbroker"
 	"nexus/internal/loadtest"
 	"nexus/internal/metrics"
+	"nexus/internal/notifcache"
 	"nexus/internal/replay"
 	"nexus/internal/store"
 )
@@ -58,6 +60,7 @@ func main() {
 
 	amqpURL := getenv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
 	pgDSN := getenv("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
+	redisURL := getenv("REDIS_URL", "redis://localhost:6379")
 	listenAddr := getenv("LISTEN_ADDR", ":"+getenv("PORT", "8080"))
 	grpcAddr := getenv("GRPC_ADDR", ":50051")
 	useKafka := getenvBool("USE_KAFKA", false)
@@ -84,6 +87,15 @@ func main() {
 		slog.Error("migration failed", "err", err)
 		os.Exit(1)
 	}
+
+	redisOpt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		slog.Error("invalid redis URL", "err", err)
+		os.Exit(1)
+	}
+	rdb := redis.NewClient(redisOpt)
+	defer rdb.Close()
+	notifCache := notifcache.New(rdb, st)
 
 	allowedOrigins := parseAllowedOrigins(os.Getenv("LOADTEST_ALLOWED_ORIGINS"))
 	slog.Info("trusted request origins configured", "count", len(allowedOrigins))
@@ -177,7 +189,8 @@ func main() {
 	// ── HTTP server ───────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /events", handlePublish(pub))
-	mux.HandleFunc("GET /notifications", handleListNotifications(st))
+	mux.HandleFunc("GET /notifications/{message_id}", handleGetNotification(notifCache))
+	mux.HandleFunc("GET /notifications", handleListNotifications(notifCache))
 	mux.HandleFunc("POST /notifications/clear", handleClearNotifications(st))
 	mux.HandleFunc("POST /dlq/replay", handleReplay(replayer))
 	mux.HandleFunc("POST /ops/loadtest/start", handleLoadtestStart(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
@@ -327,9 +340,9 @@ func handlePublish(pub eventPublisher) http.HandlerFunc {
 	}
 }
 
-func handleListNotifications(st *store.Store) http.HandlerFunc {
+func handleListNotifications(c *notifcache.Cache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		notifications, err := st.ListNotifications(r.Context(), 50)
+		notifications, err := c.ListNotifications(r.Context(), 50)
 		if err != nil {
 			slog.Error("list notifications failed", "err", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -337,6 +350,31 @@ func handleListNotifications(st *store.Store) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(notifications)
+	}
+}
+
+// handleGetNotification is the cache-aside hot path — the one the RUNBOOK
+// points at for the 95% by_id hit-rate figure. Repeat lookups of the same
+// message_id within TTL come back from Redis; the first read fills the
+// cache from PostgreSQL.
+func handleGetNotification(c *notifcache.Cache) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("message_id")
+		if strings.TrimSpace(id) == "" {
+			http.Error(w, "message_id is required", http.StatusBadRequest)
+			return
+		}
+		rows, err := c.GetByMessageID(r.Context(), id)
+		if err != nil {
+			slog.Error("get notification failed", "msg_id", id, "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if len(rows) == 0 {
+			writeJSONError(w, http.StatusNotFound, "notification not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
 	}
 }
 

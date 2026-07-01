@@ -131,6 +131,26 @@ var (
 		[]string{"channel", "priority"},
 	)
 
+	// CacheHits / CacheMisses track the cache-aside path in front of the
+	// notifications store. scope label distinguishes "by_id" (the hot
+	// path — one row per message_id, TTL 60s) from "list" (short-TTL
+	// query cache for the paged list endpoint). The RUNBOOK's 95%
+	// hit-rate figure is scope="by_id" only.
+	CacheHits = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "nexus_cache_hits_total",
+			Help: "Cache-aside hits, labeled by scope (by_id | list).",
+		},
+		[]string{"scope"},
+	)
+	CacheMisses = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "nexus_cache_misses_total",
+			Help: "Cache-aside misses, labeled by scope (by_id | list).",
+		},
+		[]string{"scope"},
+	)
+
 	// LoadtestStartTotal counts start endpoint outcomes.
 	// Labels: status (ok|deny|error).
 	LoadtestStartTotal = prometheus.NewCounterVec(
@@ -178,6 +198,8 @@ func init() {
 		EventE2ELag,
 		ConsumerLagRecords,
 		DLQMessages,
+		CacheHits,
+		CacheMisses,
 		LoadtestStartTotal,
 		LoadtestUpstreamLatency,
 		LoadtestActiveRuns,
