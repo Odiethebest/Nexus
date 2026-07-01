@@ -72,6 +72,65 @@ var (
 		[]string{"channel", "priority"},
 	)
 
+	// StageProcessingDuration measures the worker's fetch → commit critical
+	// section for a single record (idempotency check + delivery + persist
+	// + offset commit). Second leg of the three-stage e2e trace.
+	StageProcessingDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "nexus_stage_processing_duration_seconds",
+			Help:    "Per-record worker processing time (idempotency + deliver + persist + commit).",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5},
+		},
+		[]string{"channel"},
+	)
+
+	// StageDeliveryDuration isolates the dispatch step alone (SMTP send /
+	// WebSocket broadcast / outbound HTTP POST), so callers can tell
+	// "worker is slow" from "downstream is slow". Third leg of the trace.
+	StageDeliveryDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "nexus_stage_delivery_duration_seconds",
+			Help:    "Time spent in the actual channel dispatch call.",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
+		},
+		[]string{"channel"},
+	)
+
+	// EventE2ELag is the age of an event when a worker starts processing
+	// it — computed as (now - x-produced-at). This is the "consumer lag
+	// in seconds" figure the resume points at ("lag < 1.5s"). Distinct
+	// from ConsumerLagRecords (Kafka-side offset gap gauge).
+	EventE2ELag = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "nexus_event_e2e_lag_seconds",
+			Help:    "Age of the event when the consumer picks it up (now - x-produced-at).",
+			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 1.5, 2, 5, 10, 30},
+		},
+		[]string{"channel"},
+	)
+
+	// ConsumerLagRecords is the classic Kafka offset gap per lane
+	// (end offset − committed offset). Wired by internal/kbroker/lag.go
+	// in Step 4.
+	ConsumerLagRecords = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "nexus_consumer_lag_records",
+			Help: "End offset minus committed offset for each (channel, priority) consumer group.",
+		},
+		[]string{"channel", "priority"},
+	)
+
+	// DLQMessages approximates the number of records sitting in a
+	// dead-letter topic (= end offset of the DLQ topic). Used by the
+	// metrics summary to replace the previously hardcoded zero.
+	DLQMessages = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "nexus_dlq_messages_total",
+			Help: "Approximate DLQ backlog per (channel, priority), sampled from end offsets.",
+		},
+		[]string{"channel", "priority"},
+	)
+
 	// LoadtestStartTotal counts start endpoint outcomes.
 	// Labels: status (ok|deny|error).
 	LoadtestStartTotal = prometheus.NewCounterVec(
@@ -114,6 +173,11 @@ func init() {
 		ProcessDuration,
 		StageIngestDuration,
 		EventsPublished,
+		StageProcessingDuration,
+		StageDeliveryDuration,
+		EventE2ELag,
+		ConsumerLagRecords,
+		DLQMessages,
 		LoadtestStartTotal,
 		LoadtestUpstreamLatency,
 		LoadtestActiveRuns,

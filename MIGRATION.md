@@ -92,7 +92,23 @@
 
 ### Step 3 — Worker 消费重写(3 lane × consumer group)
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- 新增 `internal/kworker/` 包:
+  - `runner.go`:通用 `Runner`,消费一个 (channel, priority) lane。用 franz-go `PollFetches` + 一个 `sem chan struct{}` 做 bounded 并发,每条 record 一个 goroutine。`DisableAutoCommit` + `BlockRebalanceOnPoll` + 手动 `CommitRecords`——**处理成功才 commit,即 at-least-once**。`AllowRebalance()` 在每轮 poll 结束后放开。
+  - `processors.go`:`EmailProcessor` / `InAppProcessor` / `WebhookProcessor` 三个 `Processor` 实现。返回 `Outcome`(Delivered / Skipped / TransientError / PermanentError),让 runner 统一处理 retry vs DLQ。Webhook 的 500/429 → transient;其他 4xx → permanent(不重试)。
+  - `republisher.go`:`KafkaRepublisher` 独立 producer client,负责 retry re-produce 和 DLQ produce。`cloneWithRetry` **保留 `x-produced-at` 原值**——retries 不会重置 e2e lag 时钟(这是简历 "lag<1.5s" 口径的正确性关键)。
+  - `republisher_test.go`:验证 clone 保留 produced-at、更新 retry count、pool split `[pool, pool/2, pool/4]` 对齐旧 AMQP QoS。
+- `internal/metrics/metrics.go` 新增 5 个指标:
+  - `nexus_stage_processing_duration_seconds{channel}` — 三阶段中的 processing;
+  - `nexus_stage_delivery_duration_seconds{channel}` — 三阶段中的 delivery;
+  - `nexus_event_e2e_lag_seconds{channel}` — histogram,由 runner 用 `now - x-produced-at` 更新;简历 "lag<1.5s" 就看这个。
+  - `nexus_consumer_lag_records{channel,priority}` + `nexus_dlq_messages_total{channel,priority}` — 空 gauge,由 Step 4 填数据。
+- `cmd/worker/main.go`:`USE_KAFKA=true` 时,起 9 个 lane runner(3 channels × 3 priorities),每个独立 consumer group id(`nexus.<channel>.<priority>`);跟原计划的"独立 group"选择一致。SIGTERM → `signal.NotifyContext` → 各 runner `Run` 退出前 `Wait` in-flight + `CommitUncommittedOffsets` → republisher `Flush + Close` → 主 goroutine 退出。等价 graceful shutdown。
+- Retry 次数从原来 AMQP `x-death` 计数器改成消息 header `x-retry-count`;`MaxRetries=3`,指数退避 2s/4s/8s(与旧 webhook worker 一致)。
+- 差异:计划里写"每 channel 一个 group 订阅 3 topic",实测更清晰的方案是"每 lane 独立 group"(我们之前也选了这条),已按此实现。
+- `go build ./... && go test ./...` 全绿。
 
 **改动**
 - 新增 `internal/kworker/{email,inapp,webhook}.go`(或就地改 `internal/worker/`,但保留旧文件到 Step 7 一次性删);每个 worker 结构:
