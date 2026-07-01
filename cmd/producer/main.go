@@ -20,7 +20,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
-	"nexus/internal/broker"
 	"nexus/internal/envutil"
 	"nexus/internal/grpcserver"
 	"nexus/internal/hub"
@@ -58,24 +57,15 @@ func main() {
 		slog.Info("loaded environment file", "path", path)
 	}
 
-	amqpURL := getenv("AMQP_URL", "amqp://guest:guest@localhost:5672/")
 	pgDSN := getenv("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
 	redisURL := getenv("REDIS_URL", "redis://localhost:6379")
 	listenAddr := getenv("LISTEN_ADDR", ":"+getenv("PORT", "8080"))
 	grpcAddr := getenv("GRPC_ADDR", ":50051")
-	useKafka := getenvBool("USE_KAFKA", false)
 
-	// AMQP connection stays for as long as USE_KAFKA is optional. Once
-	// Step 7 removes the old broker package, this whole block goes with it.
-	var conn *broker.Connection
-	if !useKafka {
-		c, err := broker.New(amqpURL)
-		if err != nil {
-			slog.Error("failed to connect to broker", "err", err)
-			os.Exit(1)
-		}
-		conn = c
-		defer conn.Close()
+	kcfg, err := kbroker.LoadConfig()
+	if err != nil {
+		slog.Error("failed to load kafka config", "err", err)
+		os.Exit(1)
 	}
 
 	st, err := store.New(pgDSN)
@@ -104,74 +94,39 @@ func main() {
 	// handled separately by corsMiddleware.
 	wsHub := hub.New()
 
-	var (
-		pub          eventPublisher
-		kafkaPub     *kbroker.Publisher
-		amqpPub      *broker.Publisher
-		lagReader    *kbroker.LagReader
-	)
 	// Root context so background samplers (lag reader) stop when SIGTERM fires.
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	defer rootCancel()
-	if useKafka {
-		kcfg, err := kbroker.LoadConfig()
-		if err != nil {
-			slog.Error("failed to load kafka config", "err", err)
-			os.Exit(1)
-		}
-		// Best-effort auto-create topics. Failures are logged but not fatal —
-		// operators may pre-create topics on managed clusters where the app
-		// lacks admin rights.
-		ctxEnsure, cancelEnsure := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := kbroker.EnsureTopics(ctxEnsure, kcfg); err != nil {
-			slog.Warn("kafka: EnsureTopics failed (continuing)", "err", err)
-		}
-		cancelEnsure()
-		kp, err := kbroker.NewPublisher(kcfg)
-		if err != nil {
-			slog.Error("failed to create kafka publisher", "err", err)
-			os.Exit(1)
-		}
-		kafkaPub = kp
-		pub = kp
-		slog.Info("publisher backend", "impl", "kafka", "brokers", kcfg.Brokers, "partitions", kcfg.TopicPartitions)
 
-		// Lag reader pushes consumer-lag + DLQ gauges into Prometheus every
-		// 3s. Runs on the producer so the summary handler can read them
-		// from the local registry without cross-service scraping.
-		lr, err := kbroker.NewLagReader(kcfg, slog.Default())
-		if err != nil {
-			slog.Warn("kafka lag reader disabled", "err", err)
-		} else {
-			lagReader = lr
-			go lagReader.Run(rootCtx, 3*time.Second)
-		}
-	} else {
-		p, err := broker.NewPublisher(conn)
-		if err != nil {
-			slog.Error("failed to create publisher", "err", err)
-			os.Exit(1)
-		}
-		amqpPub = p
-		pub = p
-		slog.Info("publisher backend", "impl", "amqp")
+	// Best-effort auto-create topics. Failures are logged but not fatal —
+	// operators may pre-create topics on managed clusters where the app
+	// lacks admin rights.
+	ctxEnsure, cancelEnsure := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := kbroker.EnsureTopics(ctxEnsure, kcfg); err != nil {
+		slog.Warn("kafka: EnsureTopics failed (continuing)", "err", err)
 	}
-	_ = amqpPub // silence unused warning when useKafka=true
+	cancelEnsure()
 
-	// Replay: Kafka replayer under USE_KAFKA (Step 5), AMQP replayer
-	// otherwise. Both share the same *replay.Replayer struct so
-	// handleReplay does not care which backend it is talking to.
-	var replayer *replay.Replayer
-	if useKafka {
-		kcfg, err := kbroker.LoadConfig()
-		if err != nil {
-			slog.Error("kafka config for replay", "err", err)
-			os.Exit(1)
-		}
-		replayer = replay.New(kcfg, slog.Default())
-	} else {
-		replayer = replay.NewAMQP(conn)
+	kafkaPub, err := kbroker.NewPublisher(kcfg)
+	if err != nil {
+		slog.Error("failed to create kafka publisher", "err", err)
+		os.Exit(1)
 	}
+	var pub eventPublisher = kafkaPub
+	slog.Info("publisher backend", "impl", "kafka", "brokers", kcfg.Brokers, "partitions", kcfg.TopicPartitions)
+
+	// Lag reader pushes consumer-lag + DLQ gauges into Prometheus every
+	// 3s. Runs on the producer so the summary handler can read them
+	// from the local registry without cross-service scraping.
+	var lagReader *kbroker.LagReader
+	if lr, err := kbroker.NewLagReader(kcfg, slog.Default()); err != nil {
+		slog.Warn("kafka lag reader disabled", "err", err)
+	} else {
+		lagReader = lr
+		go lagReader.Run(rootCtx, 3*time.Second)
+	}
+
+	replayer := replay.New(kcfg, slog.Default())
 	loadtestSvc, err := initLoadtestService()
 	if err != nil {
 		slog.Error("failed to initialize loadtest service", "err", err)

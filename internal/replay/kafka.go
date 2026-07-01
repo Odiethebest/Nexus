@@ -18,54 +18,38 @@ import (
 	"nexus/internal/kbroker"
 )
 
-// Replayer is a small facade that dispatches to either the Kafka or the
-// AMQP backend depending on which was wired at startup. This keeps the
-// public method signature identical to the pre-migration AMQP replayer so
-// the HTTP handler in cmd/producer/main.go does not care which backend
-// is active.
+// Replayer reads records from a Kafka DLQ topic and re-produces them to
+// the corresponding primary lane topic.
 type Replayer struct {
-	// Exactly one of these is non-nil.
-	kafka *kafkaReplayer
-	amqp  *AMQPReplayer
-}
-
-// Replay routes to the configured backend.
-func (r *Replayer) Replay(ctx context.Context, target string, max int) (int, error) {
-	switch {
-	case r.kafka != nil:
-		return r.kafka.replay(ctx, target, max)
-	case r.amqp != nil:
-		return r.amqp.replay(ctx, target, max)
-	default:
-		return 0, fmt.Errorf("replay: no backend configured")
-	}
-}
-
-// kafkaReplayer holds the Kafka-side state for the facade.
-type kafkaReplayer struct {
 	cfg kbroker.Config
 	log *slog.Logger
 }
 
-// New constructs a Kafka-backed Replayer.
+// New constructs a Replayer bound to the given cluster config.
 func New(cfg kbroker.Config, log *slog.Logger) *Replayer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Replayer{kafka: &kafkaReplayer{cfg: cfg, log: log}}
+	return &Replayer{cfg: cfg, log: log}
+}
+
+// Replay pulls up to max messages from the DLQ topic (target) and
+// re-produces each to the corresponding primary topic.
+func (r *Replayer) Replay(ctx context.Context, target string, max int) (int, error) {
+	return r.replay(ctx, target, max)
 }
 
 // replay pulls up to max records from the DLQ topic (target) and
 // re-produces each to the corresponding primary topic. `target` accepts
 // both Kafka-native names ("nexus.dlq.email.high") and the legacy AMQP
-// form ("nexus.email.dlq.high") — the latter is normalized so the
-// frontend keeps working across the migration.
+// form ("nexus.email.dlq.high") — the latter is normalized so old
+// frontend clients calling POST /dlq/replay still work.
 //
 // Uses a dedicated consumer group ("nexus.replay") with manual commits, so
 // each DLQ record is replayed once per operator invocation; a re-run of
 // this call after everything drains is a no-op (idempotency also ensures
 // worker-side dedupe).
-func (r *kafkaReplayer) replay(ctx context.Context, target string, max int) (int, error) {
+func (r *Replayer) replay(ctx context.Context, target string, max int) (int, error) {
 	dlqTopic := kbroker.NormalizeDLQTopic(target)
 	primary, ok := kbroker.PrimaryFromDLQ(dlqTopic)
 	if !ok {

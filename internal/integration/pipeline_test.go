@@ -1,45 +1,67 @@
 //go:build integration
 
 // Package integration tests the full publish → worker → DB pipeline
-// by spinning up real RabbitMQ, PostgreSQL, and a miniredis instance.
+// end-to-end against a real Redpanda broker, real PostgreSQL, and
+// miniredis. Run with:
+//
+//	go test -tags=integration ./internal/integration/...
+//
+// Docker must be available (testcontainers spins up Redpanda + PostgreSQL).
 package integration_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
-	"nexus/internal/broker"
+	tcredpanda "github.com/testcontainers/testcontainers-go/modules/redpanda"
+
 	"nexus/internal/hub"
 	"nexus/internal/idempotency"
+	"nexus/internal/kbroker"
+	"nexus/internal/kworker"
 	"nexus/internal/store"
-	"nexus/internal/worker"
 )
 
 type pipelineEnv struct {
-	conn *broker.Connection
-	pub  *broker.Publisher
-	st   *store.Store
-	idem *idempotency.Client
+	cfg    kbroker.Config
+	pub    *kbroker.Publisher
+	repub  *kworker.KafkaRepublisher
+	st     *store.Store
+	idem   *idempotency.Client
+	wsHub  *hub.Hub
 }
 
 func setupPipeline(t *testing.T) *pipelineEnv {
 	t.Helper()
 	ctx := context.Background()
 
-	// RabbitMQ
-	rmq, err := tcrabbitmq.Run(ctx, "rabbitmq:3.13-alpine")
+	// Redpanda — single-node, KRaft, Kafka protocol on random host port.
+	rp, err := tcredpanda.Run(ctx, "redpandadata/redpanda:v24.2.5")
 	if err != nil {
-		t.Fatalf("start rabbitmq: %v", err)
+		t.Fatalf("start redpanda: %v", err)
 	}
-	t.Cleanup(func() { rmq.Terminate(ctx) })
-	amqpURL, err := rmq.AmqpURL(ctx)
+	t.Cleanup(func() { _ = rp.Terminate(ctx) })
+	brokers, err := rp.KafkaSeedBroker(ctx)
 	if err != nil {
-		t.Fatalf("rabbitmq URL: %v", err)
+		t.Fatalf("redpanda broker: %v", err)
+	}
+	t.Setenv("KAFKA_BROKERS", brokers)
+	t.Setenv("KAFKA_TOPIC_PARTITIONS", "3") // small for fast local runs
+	t.Setenv("KAFKA_REPLICATION_FACTOR", "1")
+
+	cfg, err := kbroker.LoadConfig()
+	if err != nil {
+		t.Fatalf("load kafka config: %v", err)
+	}
+	// Create every lane + DLQ topic up-front so consumers don't race with
+	// producer topic auto-create in the middle of the test.
+	if err := kbroker.EnsureTopics(ctx, cfg); err != nil {
+		t.Fatalf("ensure topics: %v", err)
 	}
 
 	// PostgreSQL
@@ -53,7 +75,7 @@ func setupPipeline(t *testing.T) *pipelineEnv {
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}
-	t.Cleanup(func() { pgc.Terminate(ctx) })
+	t.Cleanup(func() { _ = pgc.Terminate(ctx) })
 	dsn, _ := pgc.ConnectionString(ctx, "sslmode=disable")
 
 	// Redis (miniredis — no Docker needed)
@@ -61,16 +83,25 @@ func setupPipeline(t *testing.T) *pipelineEnv {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { rdb.Close() })
 
-	brokerConn, err := broker.New(amqpURL)
-	if err != nil {
-		t.Fatalf("broker: %v", err)
-	}
-	t.Cleanup(brokerConn.Close)
-
-	pub, err := broker.NewPublisher(brokerConn)
+	pub, err := kbroker.NewPublisher(cfg)
 	if err != nil {
 		t.Fatalf("publisher: %v", err)
 	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = pub.Close(closeCtx)
+	})
+
+	repub, err := kworker.NewKafkaRepublisher(cfg)
+	if err != nil {
+		t.Fatalf("republisher: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = repub.Close(closeCtx)
+	})
 
 	st, err := store.New(dsn)
 	if err != nil {
@@ -81,10 +112,12 @@ func setupPipeline(t *testing.T) *pipelineEnv {
 	}
 
 	return &pipelineEnv{
-		conn: brokerConn,
-		pub:  pub,
-		st:   st,
-		idem: idempotency.New(rdb),
+		cfg:   cfg,
+		pub:   pub,
+		repub: repub,
+		st:    st,
+		idem:  idempotency.New(rdb),
+		wsHub: hub.New(),
 	}
 }
 
@@ -106,101 +139,79 @@ func waitForRows(t *testing.T, st *store.Store, n int, timeout time.Duration) []
 	return nil
 }
 
-func TestPipeline_PublishDeliveredToDB(t *testing.T) {
-	env := setupPipeline(t)
-	ctx := context.Background()
-
-	emailW, err := worker.NewEmailWorker(env.conn, nil, env.idem, env.st, 2)
+// runEmailLane spins up an email/high runner in the background for the
+// duration of a single test.
+func (env *pipelineEnv) runLane(t *testing.T, ctx context.Context, ch kbroker.Channel, p kbroker.Priority, proc kworker.Processor) {
+	t.Helper()
+	runner, err := kworker.NewRunner(env.cfg, kworker.RunnerOptions{
+		Channel:     ch,
+		Priority:    p,
+		PoolSize:    2,
+		Processor:   proc,
+		Idempotency: env.idem,
+		Store:       env.st,
+		Republisher: env.repub,
+	})
 	if err != nil {
-		t.Fatalf("email worker: %v", err)
+		t.Fatalf("build runner %s/%s: %v", ch, p, err)
 	}
-
-	wCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-	go emailW.Run(wCtx)
-
-	msgID, err := env.pub.Publish(ctx, "order", "high", map[string]any{"user_id": "u1"})
-	if err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-
-	rows := waitForRows(t, env.st, 1, 10*time.Second)
-	if len(rows) == 0 {
-		t.Fatal("timeout: no notification persisted after 10s")
-	}
-	if rows[0].MessageID != msgID {
-		t.Errorf("message_id: got %s, want %s", rows[0].MessageID, msgID)
-	}
-	if rows[0].Status != "delivered" {
-		t.Errorf("status: got %s, want delivered", rows[0].Status)
-	}
+	go func() { _ = runner.Run(ctx) }()
 }
 
-func TestPipeline_IdempotentDelivery_OneRowOnly(t *testing.T) {
-	env := setupPipeline(t)
-	ctx := context.Background()
-
-	emailW, err := worker.NewEmailWorker(env.conn, nil, env.idem, env.st, 2)
-	if err != nil {
-		t.Fatalf("email worker: %v", err)
+func TestPipeline_PublishDeliveredToDB(t *testing.T) {
+	if _, err := os.Stat("/var/run/docker.sock"); err != nil && os.Getenv("DOCKER_HOST") == "" {
+		t.Skip("docker not available")
 	}
+	env := setupPipeline(t)
 
-	wCtx, cancel := context.WithCancel(ctx)
+	wCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go emailW.Run(wCtx)
+	env.runLane(t, wCtx, kbroker.ChannelEmail, kbroker.PriorityHigh, &kworker.EmailProcessor{})
 
-	// Publish once
-	msgID, err := env.pub.Publish(ctx, "order", "high", map[string]any{"user_id": "u2"})
+	msgID, err := env.pub.Publish(context.Background(), "order", "high", map[string]any{"user_id": "u1"})
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
-	// Wait for first delivery to be persisted
-	if rows := waitForRows(t, env.st, 1, 10*time.Second); len(rows) == 0 {
-		t.Fatal("timeout waiting for first delivery")
+	rows := waitForRows(t, env.st, 1, 15*time.Second)
+	if len(rows) == 0 {
+		t.Fatal("timeout: no notification persisted after 15s")
 	}
-
-	// Publish a second event with a different ID to confirm the worker is
-	// still alive, then verify the duplicate was not double-counted.
-	env.pub.Publish(ctx, "order", "high", map[string]any{"user_id": "u3", "_orig_id": msgID})
-	time.Sleep(500 * time.Millisecond)
-
-	rows, _ := env.st.ListNotifications(ctx, 10)
+	found := false
 	for _, r := range rows {
-		if r.MessageID == msgID {
-			// exactly one record for the original message
-			return
+		if r.MessageID == msgID && r.Channel == "email" {
+			found = true
+			if r.Status != "delivered" {
+				t.Errorf("status: got %s, want delivered", r.Status)
+			}
 		}
 	}
-	t.Errorf("original message %s not found in DB", msgID)
+	if !found {
+		t.Errorf("email row for %s not found in %d rows", msgID, len(rows))
+	}
 }
 
 func TestPipeline_MultipleWorkers_AllChannelsDeliver(t *testing.T) {
+	if _, err := os.Stat("/var/run/docker.sock"); err != nil && os.Getenv("DOCKER_HOST") == "" {
+		t.Skip("docker not available")
+	}
 	env := setupPipeline(t)
-	ctx := context.Background()
 
-	emailW, _ := worker.NewEmailWorker(env.conn, nil, env.idem, env.st, 2)
-	inappW, _ := worker.NewInAppWorker(env.conn, hub.New(), env.idem, env.st, 2)
-	webhookW, _ := worker.NewWebhookWorker(env.conn, env.idem, env.st, 2)
-
-	wCtx, cancel := context.WithCancel(ctx)
+	wCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go emailW.Run(wCtx)
-	go inappW.Run(wCtx)
-	go webhookW.Run(wCtx)
+	env.runLane(t, wCtx, kbroker.ChannelEmail, kbroker.PriorityHigh, &kworker.EmailProcessor{})
+	env.runLane(t, wCtx, kbroker.ChannelInApp, kbroker.PriorityHigh, &kworker.InAppProcessor{Hub: env.wsHub})
+	env.runLane(t, wCtx, kbroker.ChannelWebhook, kbroker.PriorityHigh, kworker.NewWebhookProcessor(nil))
 
-	// Single publish fan-outs to email + inapp + webhook queues
-	msgID, err := env.pub.Publish(ctx, "order", "high", map[string]any{"user_id": "u4"})
+	msgID, err := env.pub.Publish(context.Background(), "order", "high", map[string]any{"user_id": "u4"})
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
-	// Expect 3 rows: one per channel
-	rows := waitForRows(t, env.st, 3, 15*time.Second)
+	rows := waitForRows(t, env.st, 3, 20*time.Second)
 	if len(rows) < 3 {
-		t.Fatalf("expected 3 notifications (one per channel), got %d", len(rows))
+		t.Fatalf("expected 3 rows (one per channel), got %d", len(rows))
 	}
-
 	channels := map[string]bool{}
 	for _, r := range rows {
 		if r.MessageID == msgID {

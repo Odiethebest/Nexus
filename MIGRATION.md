@@ -240,7 +240,18 @@
 
 ### Step 7 — 删除旧 AMQP 代码 + 依赖
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- 删除:`internal/broker/{connection,priority,publisher}.go`、`internal/worker/{email,inapp,webhook}.go`、`internal/replay/amqp.go`。
+- `internal/replay/kafka.go`:facade 抹平——`Replayer` 现在就是 Kafka 版本(不再有 `kafka` / `amqp` 字段),`New(cfg, log)` 是唯一构造函数。
+- `cmd/producer/main.go`:清掉 `USE_KAFKA` 分支、`broker.Connection`、`broker.NewPublisher`、`replay.NewAMQP`、`_ = amqpPub` 兜底。Kafka 是唯一路径。
+- `cmd/worker/main.go`:完全重写为 Kafka-only(9 lane runner + republisher);去掉 `getenvBool`(不再需要),AMQP_URL env 删除。
+- `.env.example`:删掉 `AMQP_URL` / `USE_KAFKA`。
+- `go.mod`:`go mod tidy` 后 `github.com/rabbitmq/amqp091-go`、`testcontainers/modules/rabbitmq` 均已消失;顺带升级 otel / grpc / testcontainers-go 到 redpanda 模块要求的最低版本。
+- `internal/integration/pipeline_test.go`:重写为 `testcontainers-go/modules/redpanda`(Redpanda `v24.2.5` 镜像),`kbroker.EnsureTopics` 建 topic 后跑 `kbroker.Publisher` + `kworker.Runner` 打通端到端。原来的两个用例被简化(去掉了 IdempotentDelivery 依赖 amqp 特殊语义的用例;idempotency 已有 `internal/idempotency/idempotency_test.go` 单测覆盖)。集成测试需要 Docker,`go test -tags=integration ./internal/integration/...` 触发,自动 skip 没 Docker 的环境。
+- Grep 验证:`grep -rn -E "\bamqp\b|amqp091|rabbitmq" --include='*.go'` 无结果。
+- `go build ./... && go test ./...` 全绿。
 
 **改动**
 - 删 `internal/broker/{connection,priority,publisher}.go`(publisher.go 里的 `Event` 类型迁到 `internal/kbroker/event.go`,保持 JSON 字段完全一致)。
