@@ -1,5 +1,6 @@
-// Package replay provides DLQ message replay — reads dead-lettered messages
-// from a queue and republishes them to the exchange for reprocessing.
+// Package replay's AMQP path: retained during the migration so the
+// legacy USE_KAFKA=false code path keeps working. Deleted in Step 7 of
+// MIGRATION.md.
 package replay
 
 import (
@@ -8,24 +9,26 @@ import (
 	"log/slog"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+
 	"nexus/internal/broker"
 )
 
-// Replayer reads messages from a DLQ and republishes them to the exchange.
-type Replayer struct {
+// AMQPReplayer reads dead-lettered messages from a RabbitMQ DLQ queue and
+// re-publishes them to the topic exchange under the original routing key.
+type AMQPReplayer struct {
 	conn *broker.Connection
 }
 
-// New creates a Replayer backed by conn.
-func New(conn *broker.Connection) *Replayer {
-	return &Replayer{conn: conn}
+// NewAMQP builds an AMQPReplayer bound to the given AMQP connection.
+func NewAMQP(conn *broker.Connection) *Replayer {
+	// Wrap in the Replayer facade so cmd/producer sees a single type. The
+	// backend is chosen inside the facade methods.
+	return &Replayer{amqp: &AMQPReplayer{conn: conn}}
 }
 
-// Replay pulls up to max messages from queue and re-publishes each one to the
-// exchange using the original routing key stored in the x-death header.
-// Returns the number of messages successfully replayed.
-func (r *Replayer) Replay(ctx context.Context, queue string, max int) (int, error) {
-	ch, err := r.conn.OpenChannel()
+// replayAMQP is the shim the facade calls when running against RabbitMQ.
+func (a *AMQPReplayer) replay(ctx context.Context, queue string, max int) (int, error) {
+	ch, err := a.conn.OpenChannel()
 	if err != nil {
 		return 0, fmt.Errorf("replay: open channel: %w", err)
 	}
@@ -38,13 +41,11 @@ func (r *Replayer) Replay(ctx context.Context, queue string, max int) (int, erro
 			return count, fmt.Errorf("replay: get from %q: %w", queue, err)
 		}
 		if !ok {
-			break // queue empty
+			break
 		}
-
 		routingKey := originalRoutingKey(msg)
 		slog.Info("replay: republishing message",
 			"msg_id", msg.MessageId, "queue", queue, "routing_key", routingKey)
-
 		if err := ch.PublishWithContext(ctx,
 			broker.ExchangeName,
 			routingKey,
@@ -57,20 +58,16 @@ func (r *Replayer) Replay(ctx context.Context, queue string, max int) (int, erro
 				Body:         msg.Body,
 			},
 		); err != nil {
-			msg.Nack(false, true) // put it back
+			msg.Nack(false, true)
 			return count, fmt.Errorf("replay: republish message %q: %w", msg.MessageId, err)
 		}
-
 		msg.Ack(false)
 		count++
 	}
-
-	slog.Info("replay: done", "queue", queue, "replayed", count)
+	slog.Info("replay: done (amqp)", "queue", queue, "replayed", count)
 	return count, nil
 }
 
-// originalRoutingKey extracts the first routing key from the x-death header
-// so the message is re-delivered to the same queue it came from.
 func originalRoutingKey(d amqp.Delivery) string {
 	deaths, ok := d.Headers["x-death"].([]interface{})
 	if !ok || len(deaths) == 0 {

@@ -174,7 +174,18 @@
 
 ### Step 5 — Replay 适配(DLQ topic → 主 topic 重发)
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- 拆成两个文件 + facade:
+  - `internal/replay/kafka.go`:`kafkaReplayer.replay(ctx, target, max)` — 独立 kgo consumer(group=`nexus.replay`, `AtStart` reset, manual commit)+ 独立 producer,读 DLQ topic 中最多 max 条,`rebuildForPrimary` **重置 `x-retry-count=0`,保留 `x-produced-at`**,重发到主 lane topic。PollFetches 用 5s 超时避免空 topic 卡死。
+  - `internal/replay/amqp.go`:老 AMQP 路径搬进来,保持迁移期间 USE_KAFKA=false 也能用;Step 7 删除。
+  - 外层 `Replayer` 是个 facade,同时持 `kafka` / `amqp` 字段(exactly one),`Replay(ctx, target, max)` 方法路由到有的那个。这样 HTTP handler `handleReplay(*replay.Replayer)` 一处不变。
+- `cmd/producer/main.go`:USE_KAFKA=true 时 `replay.New(kcfg, logger)`,否则 `replay.NewAMQP(conn)`。删掉 Step 2 引入的 `handleReplayDisabled` 兜底。
+- 兼容老 body 格式:`POST /dlq/replay {"queue":"nexus.email.dlq.high", "max":100}` 通过 `kbroker.NormalizeDLQTopic` 归一化到 `nexus.dlq.email.high`,前端零改动。
+- `internal/replay/kafka_test.go`:验证 rebuild 重置 retry / 保留 produced_at / 追加 retry header when missing。
+- 差异:计划里没写要 facade,实测这是唯一能在保持 `handleReplay` 签名不变的前提下同时支持两个 backend 的做法。
+- `go build ./... && go test ./...` 全绿。
 
 **改动**
 - 重写 `internal/replay/replay.go`:

@@ -146,11 +146,19 @@ func main() {
 	}
 	_ = amqpPub // silence unused warning when useKafka=true
 
-	// Replay stays on AMQP until Step 5. When USE_KAFKA=true we skip it,
-	// because there is no AMQP connection to drive it from.
+	// Replay: Kafka replayer under USE_KAFKA (Step 5), AMQP replayer
+	// otherwise. Both share the same *replay.Replayer struct so
+	// handleReplay does not care which backend it is talking to.
 	var replayer *replay.Replayer
-	if !useKafka {
-		replayer = replay.New(conn)
+	if useKafka {
+		kcfg, err := kbroker.LoadConfig()
+		if err != nil {
+			slog.Error("kafka config for replay", "err", err)
+			os.Exit(1)
+		}
+		replayer = replay.New(kcfg, slog.Default())
+	} else {
+		replayer = replay.NewAMQP(conn)
 	}
 	loadtestSvc, err := initLoadtestService()
 	if err != nil {
@@ -171,11 +179,7 @@ func main() {
 	mux.HandleFunc("POST /events", handlePublish(pub))
 	mux.HandleFunc("GET /notifications", handleListNotifications(st))
 	mux.HandleFunc("POST /notifications/clear", handleClearNotifications(st))
-	if replayer != nil {
-		mux.HandleFunc("POST /dlq/replay", handleReplay(replayer))
-	} else {
-		mux.HandleFunc("POST /dlq/replay", handleReplayDisabled())
-	}
+	mux.HandleFunc("POST /dlq/replay", handleReplay(replayer))
 	mux.HandleFunc("POST /ops/loadtest/start", handleLoadtestStart(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
 	mux.HandleFunc("GET /ops/loadtest/{run_id}", handleLoadtestStatus(loadtestSvc, demoLoadtestSvc))
 	mux.HandleFunc("GET /ops/loadtest/latest", handleLoadtestLatest(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
@@ -369,12 +373,6 @@ func handleClearNotifications(st *store.Store) http.HandlerFunc {
 			Cleared:      cleared,
 			BeforeUnixMS: cutoff.UnixMilli(),
 		})
-	}
-}
-
-func handleReplayDisabled() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSONError(w, http.StatusServiceUnavailable, "replay unavailable in USE_KAFKA=true (Step 5 wires the Kafka replayer)")
 	}
 }
 
