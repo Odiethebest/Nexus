@@ -27,14 +27,18 @@ var (
 	)
 
 	// PublishDuration measures end-to-end publish latency including broker ack.
+	// Deprecated: kept for the legacy AMQP path. Kafka path uses
+	// StageIngestDuration.
 	PublishDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "nexus_publish_duration_seconds",
-		Help:    "Latency of event publish including broker confirm.",
+		Help:    "Latency of event publish including broker confirm (legacy AMQP path).",
 		Buckets: prometheus.DefBuckets,
 	})
 
 	// ProcessDuration measures per-message worker processing time.
 	// Labels: channel (email|inapp|webhook).
+	// Deprecated: retained during migration; new dashboards should use
+	// StageProcessingDuration.
 	ProcessDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "nexus_worker_process_duration_seconds",
@@ -42,6 +46,30 @@ var (
 			Buckets: prometheus.DefBuckets,
 		},
 		[]string{"channel"},
+	)
+
+	// StageIngestDuration measures how long the producer takes to acknowledge
+	// a publish (client submit → broker ack via kgo.Client.Produce callback).
+	// This is the "ingestion" leg of the end-to-end tracing set: ingest →
+	// processing → delivery.
+	StageIngestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "nexus_stage_ingest_duration_seconds",
+			Help:    "Kafka produce latency (submit → broker ack). Ingest stage of the three-stage trace.",
+			Buckets: []float64{0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1, 2},
+		},
+		[]string{"channel", "priority"},
+	)
+
+	// EventsPublished counts every event successfully committed by the Kafka
+	// publisher. Distinct from MessagesProcessed so the summary endpoint can
+	// report publish-rate and processed-rate separately (previously conflated).
+	EventsPublished = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "nexus_events_published_total",
+			Help: "Total events successfully produced to Kafka (post broker ack).",
+		},
+		[]string{"channel", "priority"},
 	)
 
 	// LoadtestStartTotal counts start endpoint outcomes.
@@ -84,6 +112,8 @@ func init() {
 		MessagesProcessed,
 		PublishDuration,
 		ProcessDuration,
+		StageIngestDuration,
+		EventsPublished,
 		LoadtestStartTotal,
 		LoadtestUpstreamLatency,
 		LoadtestActiveRuns,

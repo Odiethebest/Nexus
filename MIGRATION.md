@@ -62,7 +62,17 @@
 
 ### Step 2 — Kafka 版 Publisher(异步 + acks=all + 幂等)
 
-- [ ] 完成
+- [x] 完成
+
+**实际产出 / 与计划的差异**
+- 新增 `internal/kbroker/publisher.go`:签名 `Publish(ctx, eventType, priority, payload) (msgID, error)` 与旧 AMQP 完全一致。franz-go client 选项:`AllISRAcks` + `StickyKeyPartitioner`(record key=`message_id`)+ `MaxBufferedRecords(200_000)` + `ProducerBatchMaxBytes(1 MiB)`。幂等 producer 是 franz-go 默认。
+- 每次 `Publish` **fan-out 到全部 3 个 channel 的 lane topic**——精确复现 AMQP 的 `event.*.<priority>` binding 语义(以前 email/inapp/webhook 三个 queue 都绑定 `event.*.<priority>`,所以每个事件都进三个队列)。这是相对原计划的一处澄清:计划里没写 fan-out 语义,实现里必须体现。
+- Headers 5 个(`x-msg-id / x-event-type / x-priority / x-produced-at 纳秒 / x-retry-count=0`)。async `client.Produce` 回调收集 error → `Publish` 直到全部 ack 才返回,保留 HTTP 同步返回 msg_id 的调用契约。
+- `internal/metrics/metrics.go`:新增 `nexus_stage_ingest_duration_seconds{channel,priority}` histogram 和 `nexus_events_published_total{channel,priority}` counter;把旧 `nexus_publish_duration_seconds` / `nexus_worker_process_duration_seconds` 标 Deprecated。
+- `cmd/producer/main.go`:加 `USE_KAFKA` env flag(默认 false,继续走 AMQP)。true 时:调 `kbroker.EnsureTopics` 建 topic → 起 `kbroker.NewPublisher` → 用它替换 amqp `broker.Publisher`;replay handler 暂时返回 503(Step 5 才实现 Kafka replayer)。graceful shutdown 时会 flush + close kafka client。
+- `internal/grpcserver/server.go`:抽出 `Publisher` interface,`NewEventServer` / `Listen` 改吃 interface,AMQP 和 Kafka 两种 publisher 都能塞进去。
+- `.env.example` 加 `USE_KAFKA` 说明(实际值先放默认 false 到 Step 3 打通)。
+- `go build ./... && go test ./...` 全绿(集成测试有 `//go:build integration` tag,Step 7 处理)。
 
 **改动**
 - 新增 `internal/kbroker/publisher.go`,同签名 `Publish(ctx, eventType, priority, payload) (msgID string, err error)`。

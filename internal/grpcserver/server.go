@@ -16,8 +16,14 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/encoding"
-	"nexus/internal/broker"
 )
+
+// Publisher is the minimal contract EventServer needs from a broker
+// publisher. Both the AMQP broker.Publisher and the Kafka kbroker.Publisher
+// satisfy it, letting the gRPC layer swap backends without a code change.
+type Publisher interface {
+	Publish(ctx context.Context, eventType, priority string, payload map[string]any) (string, error)
+}
 
 func init() {
 	// Register a JSON codec under the "proto" name so gRPC uses JSON
@@ -57,11 +63,11 @@ type EventService interface {
 
 // EventServer implements EventService.
 type EventServer struct {
-	pub *broker.Publisher
+	pub Publisher
 }
 
 // NewEventServer returns an EventServer backed by pub.
-func NewEventServer(pub *broker.Publisher) *EventServer {
+func NewEventServer(pub Publisher) *EventServer {
 	return &EventServer{pub: pub}
 }
 
@@ -124,7 +130,7 @@ func publishHandler(srv interface{}, ctx context.Context, dec func(interface{}) 
 
 // Listen creates a TCP listener on addr, registers EventService, and returns
 // the grpc.Server and net.Listener. Caller must call srv.Serve(lis).
-func Listen(addr string, pub *broker.Publisher) (*grpc.Server, net.Listener, error) {
+func Listen(addr string, pub Publisher) (*grpc.Server, net.Listener, error) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("grpc: listen %s: %w", addr, err)

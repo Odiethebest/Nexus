@@ -23,11 +23,20 @@ import (
 	"nexus/internal/envutil"
 	"nexus/internal/grpcserver"
 	"nexus/internal/hub"
+	"nexus/internal/kbroker"
 	"nexus/internal/loadtest"
 	"nexus/internal/metrics"
 	"nexus/internal/replay"
 	"nexus/internal/store"
 )
+
+// eventPublisher is the local narrowing of what handlers need from a
+// publisher. Both broker.Publisher (AMQP) and kbroker.Publisher (Kafka)
+// satisfy it, so the USE_KAFKA feature flag can flip between them without
+// touching handler code.
+type eventPublisher interface {
+	Publish(ctx context.Context, eventType, priority string, payload map[string]any) (string, error)
+}
 
 const (
 	defaultLoadtestRequestTimeout = 20 * time.Second
@@ -51,13 +60,20 @@ func main() {
 	pgDSN := getenv("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
 	listenAddr := getenv("LISTEN_ADDR", ":"+getenv("PORT", "8080"))
 	grpcAddr := getenv("GRPC_ADDR", ":50051")
+	useKafka := getenvBool("USE_KAFKA", false)
 
-	conn, err := broker.New(amqpURL)
-	if err != nil {
-		slog.Error("failed to connect to broker", "err", err)
-		os.Exit(1)
+	// AMQP connection stays for as long as USE_KAFKA is optional. Once
+	// Step 7 removes the old broker package, this whole block goes with it.
+	var conn *broker.Connection
+	if !useKafka {
+		c, err := broker.New(amqpURL)
+		if err != nil {
+			slog.Error("failed to connect to broker", "err", err)
+			os.Exit(1)
+		}
+		conn = c
+		defer conn.Close()
 	}
-	defer conn.Close()
 
 	st, err := store.New(pgDSN)
 	if err != nil {
@@ -75,13 +91,52 @@ func main() {
 	// and from arbitrary origins in production (behind TLS). CORS for HTTP routes is
 	// handled separately by corsMiddleware.
 	wsHub := hub.New()
-	pub, err := broker.NewPublisher(conn)
-	if err != nil {
-		slog.Error("failed to create publisher", "err", err)
-		os.Exit(1)
-	}
 
-	replayer := replay.New(conn)
+	var (
+		pub          eventPublisher
+		kafkaPub     *kbroker.Publisher
+		amqpPub      *broker.Publisher
+	)
+	if useKafka {
+		kcfg, err := kbroker.LoadConfig()
+		if err != nil {
+			slog.Error("failed to load kafka config", "err", err)
+			os.Exit(1)
+		}
+		// Best-effort auto-create topics. Failures are logged but not fatal —
+		// operators may pre-create topics on managed clusters where the app
+		// lacks admin rights.
+		ctxEnsure, cancelEnsure := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := kbroker.EnsureTopics(ctxEnsure, kcfg); err != nil {
+			slog.Warn("kafka: EnsureTopics failed (continuing)", "err", err)
+		}
+		cancelEnsure()
+		kp, err := kbroker.NewPublisher(kcfg)
+		if err != nil {
+			slog.Error("failed to create kafka publisher", "err", err)
+			os.Exit(1)
+		}
+		kafkaPub = kp
+		pub = kp
+		slog.Info("publisher backend", "impl", "kafka", "brokers", kcfg.Brokers, "partitions", kcfg.TopicPartitions)
+	} else {
+		p, err := broker.NewPublisher(conn)
+		if err != nil {
+			slog.Error("failed to create publisher", "err", err)
+			os.Exit(1)
+		}
+		amqpPub = p
+		pub = p
+		slog.Info("publisher backend", "impl", "amqp")
+	}
+	_ = amqpPub // silence unused warning when useKafka=true
+
+	// Replay stays on AMQP until Step 5. When USE_KAFKA=true we skip it,
+	// because there is no AMQP connection to drive it from.
+	var replayer *replay.Replayer
+	if !useKafka {
+		replayer = replay.New(conn)
+	}
 	loadtestSvc, err := initLoadtestService()
 	if err != nil {
 		slog.Error("failed to initialize loadtest service", "err", err)
@@ -101,7 +156,11 @@ func main() {
 	mux.HandleFunc("POST /events", handlePublish(pub))
 	mux.HandleFunc("GET /notifications", handleListNotifications(st))
 	mux.HandleFunc("POST /notifications/clear", handleClearNotifications(st))
-	mux.HandleFunc("POST /dlq/replay", handleReplay(replayer))
+	if replayer != nil {
+		mux.HandleFunc("POST /dlq/replay", handleReplay(replayer))
+	} else {
+		mux.HandleFunc("POST /dlq/replay", handleReplayDisabled())
+	}
 	mux.HandleFunc("POST /ops/loadtest/start", handleLoadtestStart(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
 	mux.HandleFunc("GET /ops/loadtest/{run_id}", handleLoadtestStatus(loadtestSvc, demoLoadtestSvc))
 	mux.HandleFunc("GET /ops/loadtest/latest", handleLoadtestLatest(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
@@ -156,6 +215,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
+	if kafkaPub != nil {
+		if err := kafkaPub.Close(ctx); err != nil {
+			slog.Warn("kafka publisher close", "err", err)
+		}
+	}
 	slog.Info("producer shut down")
 }
 
@@ -215,7 +279,7 @@ func handleMetricsSummary(h *hub.Hub) http.HandlerFunc {
 	}
 }
 
-func handlePublish(pub *broker.Publisher) http.HandlerFunc {
+func handlePublish(pub eventPublisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req publishRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -286,6 +350,12 @@ func handleClearNotifications(st *store.Store) http.HandlerFunc {
 			Cleared:      cleared,
 			BeforeUnixMS: cutoff.UnixMilli(),
 		})
+	}
+}
+
+func handleReplayDisabled() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONError(w, http.StatusServiceUnavailable, "replay unavailable in USE_KAFKA=true (Step 5 wires the Kafka replayer)")
 	}
 }
 
