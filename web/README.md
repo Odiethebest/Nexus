@@ -1,12 +1,12 @@
 # Nexus Frontend
 
-A real-time monitoring and operations dashboard for the Nexus message-driven notification system. Built with Next.js 15 (App Router), shadcn/ui, and Recharts.
+A real-time monitoring and operations dashboard for the Nexus message-driven notification system. Built with Next.js 16 (App Router), shadcn/ui, and Recharts.
 
 ---
 
 ## Overview
 
-The frontend provides full operational visibility into the Nexus backend pipeline — a Go-based system that routes events through RabbitMQ across three worker channels (email, inapp, webhook) with three priority tiers (high, normal, low). The dashboard surfaces live metrics, event streams, load test results, and dead-letter queue management in a single interface.
+The frontend provides full operational visibility into the Nexus backend pipeline — a Go-based system that routes events through Redpanda (Kafka protocol) across three worker channels (email, inapp, webhook) with three priority tiers (high, normal, low). The dashboard surfaces live metrics, event streams, load test results, and dead-letter queue management in a single interface.
 
 ---
 
@@ -93,13 +93,13 @@ Client-side filters allow narrowing by channel (email / inapp / webhook) and pri
 
 ### Notifications (`/notifications`)
 
-Full notification history with three independent client-side filters: channel, status (delivered / failed / duplicate / dlq), and a substring search on event type. A record count updates as filters change. A "Clear All" action (with `AlertDialog` confirmation) calls `POST /notifications/clear` and refreshes the list.
+Full notification history with three independent client-side filters: channel, status (delivered / skipped / failed / dlq), and a substring search on event type. A record count updates as filters change. A "Clear All" action (with `AlertDialog` confirmation) calls `POST /notifications/clear` and refreshes the list.
 
 ### Load Test (`/loadtest`)
 
 Triggers the backend's demo load test mode via `POST /ops/loadtest/start`. The demo generates ~55 seconds of synthetic traffic with a realistic RPS ramp-up curve. While the test runs, the page polls `GET /ops/loadtest/latest` every 2 seconds and plots RPS and P95 latency as a dual-axis Recharts `LineChart`. An elapsed-time counter and progress bar indicate test state. Results are displayed as raw JSON after completion.
 
-Note: demo mode generates synthetic metrics server-side and does not route real messages through RabbitMQ, so `publish_rate_per_sec` from the metrics summary endpoint remains 0 during a demo run. The load test chart reads directly from the backend's synthetic series data.
+Note: demo mode generates synthetic metrics server-side and does not route real messages through the pipeline, so `publish_rate_per_sec` from the metrics summary endpoint stays at whatever the real system is doing (0 if idle) during a demo run. The load test chart reads directly from the backend's synthetic series data; the metric cards above it show the *real* pipeline, not the demo.
 
 ### Publish (`/publish`)
 
@@ -133,19 +133,25 @@ payload:  (n.payload as any)?.payload ?? n.payload   // unwrap inner payload
 
 `GET /api/metrics/summary` is served by the producer process (`:8080`) but the underlying data lives in the worker's Prometheus registry (`:9091`). The handler fetches worker metrics over HTTP, parses the Prometheus text format using `expfmt.TextParser`, and computes derived values:
 
-- **publish_rate_per_sec**: counter delta of `nexus_messages_processed_total` (all channels/statuses) divided by elapsed seconds between calls
-- **processing_latency_p99_ms**: histogram P99 interpolated from `nexus_worker_process_duration_seconds` bucket boundaries
-- **delivery_success_rate**: `delivered / (delivered + failed + duplicate + no_webhook)`
+- **publish_rate_per_sec**: **events**/s — counter delta of `nexus_events_published_total`, collapsed across the fan-out by taking the max over channels
+- **processed_rate_per_sec** / **processed_rate_per_sec_by_channel**: **records**/s from `nexus_messages_processed_total`, in total and per channel
+- **processing_latency_p99_ms**: histogram P99 interpolated from `nexus_stage_processing_duration_seconds` bucket boundaries
+- **e2e_lag_p99_seconds**: histogram P99 of `nexus_event_e2e_lag_seconds` (`now − x-produced-at` at pick-up)
+- **delivery_success_rate**: `delivered / all processed`
+
+> **Units.** One `POST /events` is one event, fanned out to one record per channel. Publish counts events; processed counts records, so the aggregate sits at ~3× publish while each per-channel rate tracks publish 1:1. Compare publish against the *slowest channel* to spot backpressure — never against `processed_rate_per_sec`.
 
 The fetcher has a 2-second timeout and returns all-zero values on worker unreachability.
 
-### Routing Key Fix
+### Chart Data
 
-RabbitMQ bindings use the pattern `event.*.high` (one wildcard segment). Event types containing dots (e.g. `payment.completed`) were originally producing routing keys like `event.payment.completed.high` (4 segments), which did not match the single-wildcard binding. The fix replaces dots in the event type with underscores at publish time: `payment.completed` → `event.payment_completed.high`.
+`ChartAreaInteractive` plots `processed_rate_per_sec_by_channel` — real per-channel counter deltas. It deliberately does not chart *published* rate per channel: fan-out makes those three series identical by construction, so they would render as three overlapping lines.
+
+`useMetrics` stamps each sample with its client-side arrival time and keeps a 15-minute rolling window. The chart selects its range by elapsed time rather than sample count, because a backgrounded tab throttles `setInterval` and "the last 12 samples" is then not "the last minute".
 
 ### CORS
 
-A global middleware in the producer wraps the entire HTTP mux and sets `Access-Control-Allow-Origin: *` on all responses, handling OPTIONS preflight requests. WebSocket upgrade uses a permissive `CheckOrigin` function (`func(*http.Request) bool { return true }`), kept separate from the HTTP CORS policy.
+The producer wraps its entire mux in an origin allow-list (`CORS_ALLOWED_ORIGINS`, comma-separated). An empty value trusts every origin — the zero-config demo default — but it must be set in production. The same allow-list is handed to the WebSocket upgrader's `CheckOrigin`, because browsers do not apply CORS to WebSocket handshakes and `/ws` would otherwise stay open to any page. Requests with no `Origin` header, and same-origin requests, always pass.
 
 ---
 
@@ -177,11 +183,14 @@ npm run build
 npx shadcn add <component-name>
 ```
 
-Local infrastructure (RabbitMQ, PostgreSQL, Redis):
+Local infrastructure (Redpanda, PostgreSQL, Redis):
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml up -d redpanda redis postgres
 ```
+
+> The full compose stack also starts Grafana on `:3000`, which collides with
+> `npm run dev`. Start only the infrastructure services, or remap one port.
 
 ---
 

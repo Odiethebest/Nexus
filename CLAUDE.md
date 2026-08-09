@@ -112,8 +112,11 @@ Handler: `internal/metrics/summary.go:ComputeSummary`. Sourced from the local Pr
 
 ```json
 {
-  "publish_rate_per_sec": 142.3,        // rate(nexus_events_published_total)
-  "processed_rate_per_sec": 138.7,      // rate(nexus_messages_processed_total)
+  "publish_rate_per_sec": 250.0,        // EVENTS/s — see units note below
+  "processed_rate_per_sec": 750.0,      // RECORDS/s — rate(nexus_messages_processed_total), all channels
+  "processed_rate_per_sec_by_channel": {  // RECORDS/s per channel; drives the dashboard chart
+    "email": 250.0, "inapp": 250.0, "webhook": 250.0
+  },
   "processing_latency_p99_ms": 38.1,    // p99 of nexus_stage_processing_duration_seconds
   "e2e_lag_p99_seconds": 0.025,         // p99 of nexus_event_e2e_lag_seconds (résumé: "lag < 1.5s")
   "queue_depth": {                      // from nexus_consumer_lag_records gauge
@@ -122,29 +125,41 @@ Handler: `internal/metrics/summary.go:ComputeSummary`. Sourced from the local Pr
     "webhook_high": 2, "webhook_normal": 5, "webhook_low": 11
   },
   "delivery_success_rate": 0.986,
-  "dlq_count": 3,                       // sum of nexus_dlq_messages_total gauge
+  "dlq_count": 3,                       // sum of nexus_dlq_messages_total gauge (cumulative; replay does not lower it)
   "active_ws_connections": 7,
   "uptime_seconds": 84732
 }
 ```
 
-> The frontend `useMetrics` hook polls this endpoint every 5 seconds (not via WebSocket).
+**Units — events vs records.** One `POST /events` is one *event*, which the publisher fans out into one *record per channel*. `publish_rate_per_sec` counts events; every `processed_*` figure counts records. So at steady state each per-channel processed rate tracks `publish_rate_per_sec` 1:1, and `processed_rate_per_sec` sits at ~3×. Comparing `publish_rate_per_sec` against `processed_rate_per_sec` directly is a unit error — to detect backpressure, compare the publish rate against the *slowest* entry in `processed_rate_per_sec_by_channel`.
+
+`publish_rate_per_sec` is derived as the **max** over `nexus_events_published_total{channel}`, not `sum ÷ 3`: dividing would bake the fan-out width into the metrics layer, and the three counters are bumped from independent async ack callbacks so they can differ by the number of in-flight publishes (`metrics.eventsFromPerChannel`).
+
+Per-channel throughput uses *processed*, not *published*, because fan-out makes the three published counters identical by construction — a per-channel publish chart would be three overlapping lines.
+
+> The frontend `useMetrics` hook polls this endpoint every 5 seconds (not via WebSocket) and keeps a 15-minute rolling history, each sample stamped with its client-side arrival time.
 
 ### 2.6 WebSocket Message Format
 
-The server broadcasts raw `broker.Event` JSON (InAppWorker forwards directly, no field remapping):
+Delivery events originate in the worker, which has no HTTP server, so they travel to the producer over Redis pub/sub (`internal/wsfeed`, channel `nexus:ws:events`) and every producer replica fans them out to its own `/ws` clients. The producer forwards the payload verbatim.
+
+The worker emits **one envelope per (message_id, channel) verdict**, so a single published event produces three — mirroring the notifications table:
 
 ```json
 {
   "message_id": "uuid",
   "type": "payment.completed",
   "priority": "high",
+  "channel": "webhook",
+  "status": "dlq",
   "payload": { ... },
   "timestamp": "2026-04-05T10:00:00Z"
 }
 ```
 
-> **Note**: Field names are `type` (not `event_type`) and `timestamp` (not `created_at`). The `channel` and `status` fields are absent. The frontend `WsEvent` type in `types/index.ts` must match this exactly.
+> **Note**: Field names are `type` (not `event_type`) and `timestamp` (not `created_at`). `channel` and `status` are always present and real — the client used to hardcode `channel: "inapp"`, which made the `/live` channel filter inert. The frontend `WsEvent` type in `types/index.ts` must match this exactly.
+
+The feed is best-effort by design: `wsfeed.Publisher` buffers and drops frames rather than blocking delivery, and bounds its shutdown drain so a slow Redis cannot hold up worker exit.
 
 ---
 
@@ -157,7 +172,7 @@ CREATE TABLE notifications (
   message_id  TEXT        NOT NULL,
   channel     TEXT        NOT NULL,  -- 'email' | 'inapp' | 'webhook'
   event_type  TEXT        NOT NULL,
-  status      TEXT        NOT NULL,  -- 'delivered' | 'failed' | 'duplicate' | 'dlq'
+  status      TEXT        NOT NULL,  -- 'delivered' | 'skipped' | 'failed' | 'dlq'
   payload     JSONB,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (message_id, channel)
@@ -194,12 +209,12 @@ CREATE INDEX notifications_created_at_idx ON notifications(created_at DESC);
 ### 4.2 Page Specs
 
 #### `/` — Dashboard
-- Displays: real-time publish rate, P99 latency, DLQ count, active WebSocket connections, queue depth chart
+- Displays four metric cards (publish rate in events/s with a per-lane backpressure badge; E2E lag p99 with the 1.5s SLO badge; cumulative dead-lettered count; active WebSocket connections) above a stacked "Delivery Throughput by Channel" area chart fed by `processed_rate_per_sec_by_channel`
 - Data source: `useMetrics` hook (5s poll of `/api/metrics/summary`)
 - Client-side rendering only (no SSR — data freshness is the priority)
 
 #### `/notifications` — Notification List
-- Filters: channel (email/inapp/webhook), status (delivered/failed/duplicate/dlq)
+- Filters: channel (email/inapp/webhook), status (delivered/skipped/failed/dlq)
 - Pagination: 50 rows per page
 - Data source: `useNotifications` hook → `GET /notifications`
 
@@ -250,7 +265,10 @@ Next.js API Routes are used only for:
 ```typescript
 export type Channel  = 'email' | 'inapp' | 'webhook'
 export type Priority = 'high' | 'normal' | 'low'
-export type Status   = 'delivered' | 'failed' | 'duplicate' | 'dlq'
+// Statuses the worker actually writes. There is no 'duplicate' row status —
+// a duplicate is committed without persisting, so it exists only as the
+// nexus_messages_processed_total{status="duplicate"} counter label.
+export type Status   = 'delivered' | 'skipped' | 'failed' | 'dlq'
 
 export interface Notification {
   message_id: string
@@ -271,13 +289,23 @@ export interface WsEvent {
 }
 
 export interface MetricsSummary {
-  publish_rate_per_sec:      number
-  processing_latency_p99_ms: number
-  queue_depth:               Record<string, number>
-  delivery_success_rate:     number
-  dlq_count:                 number
-  active_ws_connections:     number
-  uptime_seconds:            number
+  publish_rate_per_sec:              number   // events/s
+  processed_rate_per_sec:            number   // records/s, all channels
+  processed_rate_per_sec_by_channel: Record<Channel, number>  // records/s per channel
+  processing_latency_p99_ms:         number
+  e2e_lag_p99_seconds:               number
+  queue_depth:                       Record<string, number>
+  delivery_success_rate:             number
+  dlq_count:                         number
+  active_ws_connections:             number
+  uptime_seconds:                    number
+}
+
+// A summary reading plus the wall-clock time the browser received it.
+// The chart selects its window by elapsed time, not by sample count — a
+// throttled background tab polls irregularly.
+export interface MetricsSample extends MetricsSummary {
+  received_at: number
 }
 ```
 
@@ -298,6 +326,7 @@ export interface MetricsSummary {
 | `KAFKA_SASL_USER` / `KAFKA_SASL_PASS` | `...` | Managed broker credentials |
 | `POSTGRES_DSN` | `postgres://...` | Railway PostgreSQL |
 | `REDIS_URL` | `redis://...` | Railway Redis — used by both idempotency and cache-aside |
+| `CORS_ALLOWED_ORIGINS` | `https://nexus.example.com,http://localhost:3000` | Browser origin allow-list. Gates HTTP routes **and** the `/ws` upgrade. Empty → trust all (demo default). Requests with no `Origin` (curl, loadgen, Prometheus) always pass. Legacy `LOADTEST_ALLOWED_ORIGINS` is a deprecated fallback. |
 | `SMTP_HOST` | `smtp.gmail.com` | Optional; empty → email delivery is a no-op ("delivered" without send) |
 | `SMTP_PORT` | `587` | |
 | `SMTP_USER` | `...` | |
