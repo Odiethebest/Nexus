@@ -53,11 +53,32 @@ which is what the Grafana panel and the `< 1.5s` claim refer to:
 histogram_quantile(0.99, sum by (le, channel)(rate(nexus_event_e2e_lag_seconds_bucket[1m])))
 ```
 
-### Peak-throughput note (bullet honesty)
+### Measured ceiling (bullet honesty)
 
-- **Local sustained:** 150/s stably meets every SLO above.
-- **Local peak burst:** ~940/s. Beyond that, publish p99 climbs to 158ms and e2e lag p99 to ~29s — recorded honestly, **not** claimed as "达标".
-- **50K/s** is a **k6 Cloud target**, not a local measurement. Not tested on this laptop.
+Measured with the real k6 script (`k6/nexus-load.js`, thresholds encode the
+claims so a bad run exits non-zero). Everything — k6 included — on one
+M-series laptop, so the load generator competes with the system under test.
+
+| Target | Achieved (events/s) | publish p99 | `p(99)<50` |
+|---|---|---|---|
+| 200/s | 174 | 12.4 ms | pass |
+| 500/s | 435 | 13.6 ms | pass |
+| 600/s | 523 | 44.1 ms | pass |
+| 700/s | 609 | 50.5 ms | **fail** |
+| 1000/s | 870 | 78.6 ms | fail |
+| 2000/s | 1703 | 157.0 ms | fail |
+
+- **Publish p99 holds under 50 ms up to ~520 events/s** — ~1,560 records/s into
+  Kafka, since each event fans out to three lanes.
+- Past that it degrades in **latency only**: publish error rate was 0.00% at
+  every rate tested up to 2000/s.
+- **Workers drain ~2,500–3,400 records/s** (~830–1,100 events/s equivalent),
+  measured by draining a 119k-record backlog with no new load. So the binding
+  constraint here is the publish-latency SLO, not consumer throughput.
+- **50K/s remains untested.** It is the figure the 12-partition sizing is
+  derived for, not a measurement. Reaching it would need a k6 Cloud run against
+  a deployment far larger than a Railway hobby instance plus a Redpanda Cloud
+  dev cluster. See `k6/README.md` for the cloud setup.
 
 ---
 

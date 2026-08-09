@@ -18,6 +18,8 @@ export async function getLoadTestLatest() {
   return res.json()
 }
 
+export type LoadTestMode = 'demo' | 'real'
+
 export async function postEvent(body: unknown) {
   const res = await fetch(`${BASE}/events`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -27,13 +29,27 @@ export async function postEvent(body: unknown) {
   return res.json()
 }
 
-export async function startLoadTest(mode = 'demo') {
+/**
+ * Starts a load test. `real` drives Grafana Cloud k6 and is gated server-side
+ * by Guard.Authorize, which constant-time-compares X-Admin-Key against
+ * LOADTEST_ADMIN_KEY — so the key has to travel on the request. `demo`
+ * ignores it entirely.
+ */
+export async function startLoadTest(mode: LoadTestMode = 'demo', adminKey?: string) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (adminKey) headers['X-Admin-Key'] = adminKey
+
   const res = await fetch(`${BASE}/ops/loadtest/start`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ mode }),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  if (!res.ok) {
+    // The server distinguishes these, and they mean very different things to
+    // whoever is standing at the console.
+    const detail = await res.json().catch(() => null)
+    throw new Error(detail?.error ? `${detail.error} (HTTP ${res.status})` : `HTTP ${res.status}`)
+  }
   return res.json()
 }
 
