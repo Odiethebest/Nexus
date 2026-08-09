@@ -106,8 +106,11 @@ export default function LoadTestPage() {
             </Card>
           </div>
 
-          {/* Live metrics — backend demo series exposes P95, not P99 */}
-          <SectionCards metrics={latest} loading={metricsLoading} latencyLabel="P95 Latency" />
+          {/* Live pipeline metrics from /api/metrics/summary. These are the
+              real running system, independent of the demo run's synthetic
+              series below — the cards previously relabelled this p99 as
+              "P95 Latency" to match the demo chart, which mislabelled it. */}
+          <SectionCards metrics={latest} loading={metricsLoading} />
 
           {/* Demo run throughput chart */}
           {(running || completed) && chartData.length > 0 && (
