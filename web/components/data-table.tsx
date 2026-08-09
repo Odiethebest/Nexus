@@ -45,11 +45,12 @@ const channelClass: Record<string, string> = {
   webhook: "bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200",
 }
 
+// Keys are the statuses the worker actually persists (see the Status union).
 const statusClass: Record<string, string> = {
   delivered: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-  failed:    "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-  dlq:       "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-  duplicate: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
+  skipped:   "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
+  failed:    "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+  dlq:       "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
 }
 
 const columns: ColumnDef<Notification>[] = [

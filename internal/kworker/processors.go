@@ -8,25 +8,27 @@ import (
 	"net/http"
 	"time"
 
-	"nexus/internal/hub"
 	"nexus/internal/kbroker"
 	"nexus/internal/mailer"
 )
 
-// InAppProcessor broadcasts events to the WebSocket hub. It never fails
-// transiently — WS clients that can't keep up are dropped by the hub, so
-// this always reports Delivered.
+// InAppProcessor accepts events for the in-app channel. It has no failure
+// mode of its own, so it always reports Delivered.
+//
+// It used to broadcast to a *hub.Hub directly, which never reached a browser:
+// the worker's hub is a different object in a different process from the one
+// the producer serves /ws from. Fan-out to WebSocket clients now goes through
+// the runner's LiveFeed (internal/wsfeed), which covers every channel rather
+// than only this one.
 type InAppProcessor struct {
-	Hub *hub.Hub
 	Log *slog.Logger
 }
 
 func (p *InAppProcessor) Channel() kbroker.Channel { return kbroker.ChannelInApp }
 
-func (p *InAppProcessor) Deliver(_ context.Context, event kbroker.Event, body []byte) Outcome {
-	p.Hub.Broadcast(body)
+func (p *InAppProcessor) Deliver(_ context.Context, event kbroker.Event, _ []byte) Outcome {
 	if p.Log != nil {
-		p.Log.Info("inapp: broadcast to hub", "msg_id", event.MessageID, "type", event.Type)
+		p.Log.Debug("inapp: accepted", "msg_id", event.MessageID, "type", event.Type)
 	}
 	return OutcomeDelivered
 }

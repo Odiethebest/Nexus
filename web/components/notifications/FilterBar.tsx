@@ -20,7 +20,9 @@ interface FilterBarProps {
 }
 
 const CHANNELS: ChannelFilter[] = ["all", "email", "inapp", "webhook"]
-const STATUSES: StatusFilter[]  = ["all", "delivered", "failed", "duplicate", "dlq"]
+// Mirrors the Status union — "duplicate" used to be offered here but never
+// matched a row, and "skipped" (the usual webhook outcome) was missing.
+const STATUSES: StatusFilter[]  = ["all", "delivered", "skipped", "failed", "dlq"]
 
 export function FilterBar({
   channel, status, search, count,

@@ -21,7 +21,6 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredpanda "github.com/testcontainers/testcontainers-go/modules/redpanda"
 
-	"nexus/internal/hub"
 	"nexus/internal/idempotency"
 	"nexus/internal/kbroker"
 	"nexus/internal/kworker"
@@ -34,7 +33,6 @@ type pipelineEnv struct {
 	repub *kworker.KafkaRepublisher
 	st    *store.Store
 	idem  *idempotency.Client
-	wsHub *hub.Hub
 }
 
 func setupPipeline(t *testing.T) *pipelineEnv {
@@ -118,7 +116,6 @@ func setupPipeline(t *testing.T) *pipelineEnv {
 		repub: repub,
 		st:    st,
 		idem:  idempotency.New(rdb),
-		wsHub: hub.New(),
 	}
 }
 
@@ -288,7 +285,7 @@ func TestPipeline_MultipleWorkers_AllChannelsDeliver(t *testing.T) {
 	wCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	env.runLane(t, wCtx, kbroker.ChannelEmail, kbroker.PriorityHigh, &kworker.EmailProcessor{})
-	env.runLane(t, wCtx, kbroker.ChannelInApp, kbroker.PriorityHigh, &kworker.InAppProcessor{Hub: env.wsHub})
+	env.runLane(t, wCtx, kbroker.ChannelInApp, kbroker.PriorityHigh, &kworker.InAppProcessor{})
 	env.runLane(t, wCtx, kbroker.ChannelWebhook, kbroker.PriorityHigh, kworker.NewWebhookProcessor(nil))
 
 	msgID, err := env.pub.Publish(context.Background(), "order", "high", map[string]any{"user_id": "u4"})

@@ -1,37 +1,48 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { getNotifications } from '@/lib/api'
-import type { WsEvent } from '@/types'
+import type { Notification, Priority, WsEvent } from '@/types'
+
+const MAX_EVENTS = 100
+const BACKFILL_LIMIT = 50
+const RECONNECT_DELAY_MS = 3000
+
+/**
+ * A persisted Notification row carries the full broker envelope in its
+ * `payload` JSONB column, so backfilled rows need one level of unwrapping to
+ * reach the same shape the socket delivers.
+ */
+function fromNotification(n: Notification): WsEvent {
+  const envelope = n.payload as { priority?: Priority; payload?: Record<string, unknown> } | null
+  return {
+    message_id: n.message_id,
+    type:       n.event_type,
+    priority:   envelope?.priority ?? 'normal',
+    channel:    n.channel,
+    status:     n.status,
+    payload:    envelope?.payload ?? (n.payload as Record<string, unknown>) ?? {},
+    timestamp:  n.created_at,
+  }
+}
 
 export function useWebSocket() {
   const [events, setEvents] = useState<WsEvent[]>([])
   const [connected, setConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
+  const closedByUs = useRef(false)
 
   useEffect(() => {
     const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8080/ws'
+    closedByUs.current = false
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-    // Pre-populate with recent notifications so the feed isn't empty on mount
+    // Pre-populate from history so the feed isn't empty on mount.
     getNotifications()
-      .then(data => {
-        const list = Array.isArray(data) ? data : []
-        const initial: WsEvent[] = list
-          .slice(0, 50)
-          // n.payload is the full broker.Event JSON stored by the worker:
-          //   { message_id, type, priority, payload: { ...inner... }, timestamp }
-          // So we unwrap one level to get priority and the real inner payload.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((n: { message_id: string; event_type: string; channel: string; payload: any; created_at: string }) => ({
-            message_id: n.message_id,
-            type:       n.event_type,
-            priority:   n.payload?.priority ?? 'normal',
-            channel:    n.channel as import('@/types').Channel,
-            payload:    n.payload?.payload  ?? n.payload ?? {},
-            timestamp:  n.created_at,
-          }))
-        setEvents(initial)
+      .then((data: unknown) => {
+        const list = Array.isArray(data) ? (data as Notification[]) : []
+        setEvents(list.slice(0, BACKFILL_LIMIT).map(fromNotification))
       })
-      .catch(() => {/* ignore — live events will still arrive via WS */})
+      .catch(() => {/* ignore — live events still arrive over the socket */})
 
     const connect = () => {
       const ws = new WebSocket(WS_URL)
@@ -40,20 +51,24 @@ export function useWebSocket() {
       ws.onopen = () => setConnected(true)
       ws.onclose = () => {
         setConnected(false)
-        setTimeout(connect, 3000)
+        if (!closedByUs.current) {
+          reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS)
+        }
       }
       ws.onerror = () => ws.close()
       ws.onmessage = (e) => {
         try {
-          const event: WsEvent = { ...JSON.parse(e.data), channel: 'inapp' as const }
-          console.log('[ws] received:', event.type, event.priority, event.channel)
-          setEvents(prev => [event, ...prev].slice(0, 100))
-        } catch {}
+          // The server sends channel and status; nothing is inferred here.
+          const event = JSON.parse(e.data) as WsEvent
+          setEvents(prev => [event, ...prev].slice(0, MAX_EVENTS))
+        } catch {/* ignore malformed frame */}
       }
     }
 
     connect()
     return () => {
+      closedByUs.current = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
       wsRef.current?.close()
     }
   }, [])
