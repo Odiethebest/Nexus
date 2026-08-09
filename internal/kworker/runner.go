@@ -35,7 +35,8 @@ const (
 
 // MaxRetries caps how many times the same record is re-produced back onto
 // the primary topic before being routed to the DLQ. AMQP webhook worker
-// used the same budget (webhook.go:26).
+// used the same budget (webhook.go:26). A record therefore sees at most
+// MaxRetries+1 delivery attempts, spaced by defaultRetryBackoff.
 const MaxRetries = 3
 
 // Processor is the per-channel delivery logic. Email/InApp/Webhook each
@@ -54,6 +55,19 @@ type Republisher interface {
 	DLQ(ctx context.Context, rec *kgo.Record, dlqTopic string) error
 }
 
+// NotificationStore is the slice of store.Store the runner persists
+// through. Narrowed to an interface so the record-handling path can be
+// unit-tested without a live PostgreSQL.
+type NotificationStore interface {
+	SaveNotification(ctx context.Context, n store.Notification) error
+}
+
+// recordCommitter is the offset-commit half of *kgo.Client, split out for
+// the same reason as NotificationStore.
+type recordCommitter interface {
+	CommitRecords(ctx context.Context, rs ...*kgo.Record) error
+}
+
 // Runner drives a single (channel, priority) lane end-to-end.
 type Runner struct {
 	Channel     kbroker.Channel
@@ -61,11 +75,15 @@ type Runner struct {
 	PoolSize    int
 	Processor   Processor
 	Idempotency *idempotency.Client
-	Store       *store.Store
+	Store       NotificationStore
 	Republisher Republisher
 	Log         *slog.Logger
 
-	client *kgo.Client
+	client    *kgo.Client
+	committer recordCommitter
+	// backoff maps "retries already attempted" to the wait before the next
+	// one. Injectable so tests don't sit through the real 2s/4s/8s.
+	backoff func(retryCount int) time.Duration
 }
 
 // NewRunner wires a franz-go consumer client to a Processor. Each lane gets
@@ -111,6 +129,8 @@ func NewRunner(cfg kbroker.Config, opts RunnerOptions) (*Runner, error) {
 		Republisher: opts.Republisher,
 		Log:         log.With("channel", string(opts.Channel), "priority", string(opts.Priority)),
 		client:      client,
+		committer:   client,
+		backoff:     defaultRetryBackoff,
 	}, nil
 }
 
@@ -121,9 +141,15 @@ type RunnerOptions struct {
 	PoolSize    int
 	Processor   Processor
 	Idempotency *idempotency.Client
-	Store       *store.Store
+	Store       NotificationStore
 	Republisher Republisher
 	Log         *slog.Logger
+}
+
+// defaultRetryBackoff is the documented 2s / 4s / 8s schedule, indexed by
+// how many retries the record has already been through.
+func defaultRetryBackoff(retryCount int) time.Duration {
+	return time.Duration(1<<uint(retryCount+1)) * time.Second
 }
 
 // Client exposes the underlying kgo client so tests can inspect offsets.
@@ -186,9 +212,19 @@ func (r *Runner) Run(ctx context.Context) error {
 func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 	start := time.Now()
 	channelLabel := string(r.Channel)
+
+	// Retry backoff is a deliberate sleep, not work. Counting it would make
+	// the processing histogram measure the backoff schedule instead of the
+	// critical section — an 8s wait alone overflows the 5s top bucket, and a
+	// p99 landing in +Inf is not even JSON-encodable.
+	var backoffSpent time.Duration
 	defer func() {
-		metrics.StageProcessingDuration.WithLabelValues(channelLabel).Observe(time.Since(start).Seconds())
-		metrics.ProcessDuration.WithLabelValues(channelLabel).Observe(time.Since(start).Seconds())
+		spent := (time.Since(start) - backoffSpent).Seconds()
+		if spent < 0 {
+			spent = 0
+		}
+		metrics.StageProcessingDuration.WithLabelValues(channelLabel).Observe(spent)
+		metrics.ProcessDuration.WithLabelValues(channelLabel).Observe(spent)
 	}()
 
 	msgID := headerValue(rec, kbroker.HeaderMsgID)
@@ -249,7 +285,7 @@ func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 		r.commit(ctx, rec)
 
 	case OutcomeTransientError:
-		if retryCount+1 >= MaxRetries {
+		if retryCount >= MaxRetries {
 			r.Log.Warn("retry budget exhausted, routing to DLQ",
 				"msg_id", msgID, "attempts", retryCount+1)
 			r.sendToDLQ(ctx, rec)
@@ -259,14 +295,30 @@ func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 			return
 		}
 		metrics.MessagesProcessed.WithLabelValues(channelLabel, "failed").Inc()
+		// Record the failed attempt. SaveNotification upserts on
+		// (message_id, channel), so a later success or DLQ overwrites this
+		// — but until then the message is visible in history instead of
+		// disappearing between attempts.
+		r.persist(ctx, event, rec.Value, "failed")
+
+		// Release the idempotency claim before re-producing. The claim
+		// covers one attempt; the retry carries the same message_id into
+		// the same lane, so holding the claim would make it fail the dedup
+		// check and be dropped as a duplicate instead of redelivered. This
+		// also covers the two paths below that return without committing —
+		// the record is refetched and has to be let through again.
+		r.releaseClaim(ctx, channelLabel, msgID)
+
 		// Exponential backoff: 2s, 4s, 8s. Backoff happens in-process so
 		// the semaphore slot is held — this naturally throttles retries.
-		backoff := time.Duration(1<<uint(retryCount+1)) * time.Second
+		waitStart := time.Now()
 		select {
-		case <-time.After(backoff):
+		case <-time.After(r.backoff(retryCount)):
 		case <-ctx.Done():
+			backoffSpent += time.Since(waitStart)
 			return
 		}
+		backoffSpent += time.Since(waitStart)
 		if err := r.Republisher.Retry(ctx, rec, retryCount+1); err != nil {
 			r.Log.Error("retry re-produce failed", "msg_id", msgID, "err", err)
 			// Leave uncommitted — a later poll will refetch and retry.
@@ -289,11 +341,25 @@ func (r *Runner) sendToDLQ(ctx context.Context, rec *kgo.Record) {
 	}
 }
 
+// releaseClaim drops the per-attempt idempotency entry. It runs on a
+// detached context: the claim has to be released even when ctx is already
+// cancelled by shutdown, otherwise the record is refetched after restart
+// and skipped as a duplicate.
+func (r *Runner) releaseClaim(ctx context.Context, scope, msgID string) {
+	relCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := r.Idempotency.Release(relCtx, scope, msgID); err != nil {
+		// A stuck claim means the retry gets swallowed as a duplicate, so
+		// this is error-level even though there is nothing to recover here.
+		r.Log.Error("release idempotency claim", "msg_id", msgID, "err", err)
+	}
+}
+
 func (r *Runner) commit(ctx context.Context, rec *kgo.Record) {
 	// CommitRecords is synchronous — returns after broker confirms the
 	// offset commit. This is the boundary that makes the whole pipeline
 	// at-least-once: crash before this line → same record redelivered.
-	if err := r.client.CommitRecords(ctx, rec); err != nil {
+	if err := r.committer.CommitRecords(ctx, rec); err != nil {
 		r.Log.Warn("commit record", "offset", rec.Offset, "err", err)
 	}
 }
@@ -309,6 +375,7 @@ func (r *Runner) persist(ctx context.Context, event kbroker.Event, body []byte, 
 	if err != nil {
 		r.Log.Error("persist notification", "msg_id", event.MessageID, "err", err)
 	}
+
 }
 
 // PoolSizesFor returns [pool, pool/2, pool/4] mirroring the AMQP QoS
