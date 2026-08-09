@@ -56,7 +56,11 @@ func New(rdb *redis.Client, st *store.Store) *Cache {
 // counters are bumped per lookup so the RUNBOOK's hit-rate metric is
 // exactly rate(hits) / (rate(hits) + rate(misses)) for scope="by_id".
 func (c *Cache) GetByMessageID(ctx context.Context, id string) ([]store.Notification, error) {
-	key := "cache:notif:" + id
+	// The version segment is bumped whenever the cached struct changes
+	// shape. Without it, entries written by the previous build deserialise
+	// with the new field zeroed — after the priority column was added that
+	// meant a blank badge in the UI for a full TTL after every deploy.
+	key := "cache:notif:v2:" + id
 
 	if raw, err := c.rdb.Get(ctx, key).Bytes(); err == nil {
 		var cached []store.Notification
@@ -92,7 +96,7 @@ func (c *Cache) GetByMessageID(ctx context.Context, id string) ([]store.Notifica
 // list. Two seconds is long enough to absorb spikes from a polling
 // dashboard without hiding fresh writes for meaningful periods.
 func (c *Cache) ListNotifications(ctx context.Context, limit int) ([]store.Notification, error) {
-	key := fmt.Sprintf("cache:notif:list:v1:%d", limit)
+	key := fmt.Sprintf("cache:notif:list:v2:%d", limit)
 
 	if raw, err := c.rdb.Get(ctx, key).Bytes(); err == nil {
 		var cached []store.Notification

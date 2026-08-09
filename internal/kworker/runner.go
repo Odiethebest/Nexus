@@ -445,6 +445,7 @@ func (r *Runner) recordOutcome(ctx context.Context, event kbroker.Event, body []
 		Channel:   string(r.Channel),
 		EventType: event.Type,
 		Status:    status,
+		Priority:  event.Priority,
 		Payload:   body,
 	})
 	if err != nil {

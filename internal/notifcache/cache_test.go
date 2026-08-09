@@ -24,7 +24,7 @@ func TestCacheHitBumpsByIDCounter(t *testing.T) {
 	defer rdb.Close()
 
 	// Pre-fill Redis so we hit without needing a store.
-	if err := rdb.Set(ctx, "cache:notif:m1", `[]`, TTLByID).Err(); err != nil {
+	if err := rdb.Set(ctx, "cache:notif:v2:m1", `[]`, TTLByID).Err(); err != nil {
 		t.Fatalf("preload: %v", err)
 	}
 	c := &Cache{rdb: rdb, store: nil}
@@ -46,7 +46,7 @@ func TestCacheHitOnListScope(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
 
-	if err := rdb.Set(ctx, "cache:notif:list:v1:50", `[]`, TTLList).Err(); err != nil {
+	if err := rdb.Set(ctx, "cache:notif:list:v2:50", `[]`, TTLList).Err(); err != nil {
 		t.Fatalf("preload: %v", err)
 	}
 	c := &Cache{rdb: rdb, store: nil}

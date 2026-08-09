@@ -16,6 +16,7 @@ type Notification struct {
 	Channel   string          `json:"channel"`
 	EventType string          `json:"event_type"`
 	Status    string          `json:"status"`
+	Priority  string          `json:"priority"`
 	Payload   json.RawMessage `json:"payload"`
 	CreatedAt time.Time       `json:"created_at"`
 }
@@ -37,20 +38,57 @@ func New(dsn string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Migrate creates the notifications table and index if they don't exist.
+// Migrate brings the notifications table up to the current shape. It is
+// idempotent and runs on every boot of both the producer and the worker.
+//
+// The whole thing is one multi-statement Exec with no arguments on purpose:
+// pgx then uses the simple protocol, which Postgres wraps in a single
+// implicit transaction, so the migration is all-or-nothing even with two
+// services racing to run it at startup. Adding a bind parameter would
+// switch to the extended protocol and silently lose that property.
 func (s *Store) Migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
+		-- Serialise migrations across instances. The producer and the worker
+		-- both migrate at boot, and CREATE TABLE IF NOT EXISTS is not safe
+		-- under concurrency: two sessions can both pass the existence check
+		-- and one then dies on pg_type_typname_nsp_index. On a cold start
+		-- that crash-looped the worker until the producer won the race.
+		-- The lock is transaction-scoped, so it releases on commit.
+		SELECT pg_advisory_xact_lock(4823150927364);
+
 		CREATE TABLE IF NOT EXISTS notifications (
 			message_id  TEXT        NOT NULL,
 			channel     TEXT        NOT NULL,
 			event_type  TEXT        NOT NULL,
 			status      TEXT        NOT NULL,
+			priority    TEXT        NOT NULL DEFAULT 'normal',
 			payload     JSONB,
 			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (message_id, channel)
 		);
 		CREATE INDEX IF NOT EXISTS notifications_created_at_idx
 			ON notifications (created_at DESC);
+
+		-- Existing deployments: CREATE TABLE IF NOT EXISTS will not add a
+		-- column to a table that already exists, so add it explicitly.
+		ALTER TABLE notifications ADD COLUMN IF NOT EXISTS priority TEXT;
+
+		-- Recover the real priority instead of stamping every historical row
+		-- 'normal'. payload holds the full event envelope, which carries the
+		-- priority the message was published with. Restricting to the three
+		-- known lanes also keeps a malformed payload from poisoning the
+		-- column.
+		UPDATE notifications
+		   SET priority = payload->>'priority'
+		 WHERE priority IS NULL
+		   AND payload->>'priority' IN ('high', 'normal', 'low');
+
+		-- Rows whose payload cannot answer (NULL or malformed) fall back, so
+		-- the NOT NULL below cannot fail on existing data.
+		UPDATE notifications SET priority = 'normal' WHERE priority IS NULL;
+
+		ALTER TABLE notifications ALTER COLUMN priority SET DEFAULT 'normal';
+		ALTER TABLE notifications ALTER COLUMN priority SET NOT NULL;
 	`)
 	if err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
@@ -60,12 +98,19 @@ func (s *Store) Migrate(ctx context.Context) error {
 
 // SaveNotification upserts a delivery record.
 func (s *Store) SaveNotification(ctx context.Context, n Notification) error {
+	// The column is NOT NULL and an empty string would be worse than the
+	// documented default, so normalise here rather than relying on callers.
+	priority := n.Priority
+	if priority == "" {
+		priority = "normal"
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO notifications (message_id, channel, event_type, status, payload)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO notifications (message_id, channel, event_type, status, priority, payload)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (message_id, channel) DO UPDATE
-			SET status = EXCLUDED.status
-	`, n.MessageID, n.Channel, n.EventType, n.Status, n.Payload)
+			SET status = EXCLUDED.status,
+			    priority = EXCLUDED.priority
+	`, n.MessageID, n.Channel, n.EventType, n.Status, priority, n.Payload)
 	if err != nil {
 		return fmt.Errorf("store: save notification: %w", err)
 	}
@@ -95,7 +140,7 @@ func (s *Store) HasNotification(ctx context.Context, messageID, channel string) 
 // ListNotifications returns the most recent notifications up to limit.
 func (s *Store) ListNotifications(ctx context.Context, limit int) ([]Notification, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT message_id, channel, event_type, status, payload, created_at
+		SELECT message_id, channel, event_type, status, priority, payload, created_at
 		FROM notifications
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -108,12 +153,17 @@ func (s *Store) ListNotifications(ctx context.Context, limit int) ([]Notificatio
 	var result []Notification
 	for rows.Next() {
 		var n Notification
+		// payload is nullable, and database/sql cannot scan NULL straight
+		// into json.RawMessage. Going via []byte yields a nil payload
+		// instead of failing the whole query on one such row.
+		var payload []byte
 		if err := rows.Scan(
 			&n.MessageID, &n.Channel, &n.EventType,
-			&n.Status, &n.Payload, &n.CreatedAt,
+			&n.Status, &n.Priority, &payload, &n.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
+		n.Payload = payload
 		result = append(result, n)
 	}
 	return result, rows.Err()
@@ -122,10 +172,10 @@ func (s *Store) ListNotifications(ctx context.Context, limit int) ([]Notificatio
 // GetByMessageID returns every persisted delivery row for a single
 // message_id, one per channel it was fanned out to. The result is small
 // (at most 3 rows in the current design) so callers can cache it whole
-// under cache:notif:{id}.
+// under cache:notif:v2:{id}.
 func (s *Store) GetByMessageID(ctx context.Context, messageID string) ([]Notification, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT message_id, channel, event_type, status, payload, created_at
+		SELECT message_id, channel, event_type, status, priority, payload, created_at
 		FROM notifications
 		WHERE message_id = $1
 		ORDER BY channel
@@ -138,9 +188,11 @@ func (s *Store) GetByMessageID(ctx context.Context, messageID string) ([]Notific
 	var out []Notification
 	for rows.Next() {
 		var n Notification
-		if err := rows.Scan(&n.MessageID, &n.Channel, &n.EventType, &n.Status, &n.Payload, &n.CreatedAt); err != nil {
+		var payload []byte // see ListNotifications: payload is nullable
+		if err := rows.Scan(&n.MessageID, &n.Channel, &n.EventType, &n.Status, &n.Priority, &payload, &n.CreatedAt); err != nil {
 			return nil, err
 		}
+		n.Payload = payload
 		out = append(out, n)
 	}
 	return out, rows.Err()

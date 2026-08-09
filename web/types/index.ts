@@ -19,8 +19,8 @@ export interface Notification {
   message_id: string
   channel:    Channel
   event_type: string
-  // priority field not yet in DB schema — re-enable after migration
   status:     Status
+  priority:   Priority
   payload:    Record<string, unknown>
   created_at: string
 }

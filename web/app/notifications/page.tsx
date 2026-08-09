@@ -23,15 +23,17 @@ import {
 import { Button } from "@/components/ui/button"
 import { clearNotifications } from "@/lib/api"
 import { useNotifications } from "@/hooks/useNotifications"
-import type { Channel, Status } from "@/types"
+import type { Channel, Priority, Status } from "@/types"
 
 type ChannelFilter = "all" | Channel
-type StatusFilter  = "all" | Status
+type StatusFilter   = "all" | Status
+type PriorityFilter = "all" | Priority
 
 export default function NotificationsPage() {
   const { notifications, loading, error, refresh } = useNotifications()
   const [channel, setChannel] = useState<ChannelFilter>("all")
   const [status,  setStatus]  = useState<StatusFilter>("all")
+  const [priority, setPriority] = useState<PriorityFilter>("all")
   const [search,  setSearch]  = useState("")
 
   useEffect(() => { document.title = "Notifications — Nexus" }, [])
@@ -39,12 +41,13 @@ export default function NotificationsPage() {
   const filtered = (notifications ?? []).filter(n => {
     if (channel !== "all" && n.channel !== channel) return false
     if (status  !== "all" && n.status  !== status)  return false
+    if (priority !== "all" && n.priority !== priority) return false
     if (search && !n.event_type.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
 
-  const hasActiveFilter = channel !== "all" || status !== "all" || search !== ""
-  const clearFilters = () => { setChannel("all"); setStatus("all"); setSearch("") }
+  const hasActiveFilter = channel !== "all" || status !== "all" || priority !== "all" || search !== ""
+  const clearFilters = () => { setChannel("all"); setStatus("all"); setPriority("all"); setSearch("") }
 
   const handleClearAll = async () => {
     try {
@@ -103,10 +106,12 @@ export default function NotificationsPage() {
           <FilterBar
             channel={channel}
             status={status}
+            priority={priority}
             search={search}
             count={filtered.length}
             onChannel={setChannel}
             onStatus={setStatus}
+            onPriority={setPriority}
             onSearch={setSearch}
             onClear={clearFilters}
             hasActiveFilter={hasActiveFilter}

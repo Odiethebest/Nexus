@@ -2,18 +2,21 @@
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { Channel, Status } from "@/types"
+import type { Channel, Priority, Status } from "@/types"
 
 type ChannelFilter = "all" | Channel
-type StatusFilter  = "all" | Status
+type StatusFilter   = "all" | Status
+type PriorityFilter = "all" | Priority
 
 interface FilterBarProps {
   channel:       ChannelFilter
   status:        StatusFilter
+  priority:      PriorityFilter
   search:        string
   count:         number
   onChannel:     (v: ChannelFilter) => void
   onStatus:      (v: StatusFilter)  => void
+  onPriority:    (v: PriorityFilter) => void
   onSearch:      (v: string) => void
   onClear:       () => void
   hasActiveFilter: boolean
@@ -22,11 +25,12 @@ interface FilterBarProps {
 const CHANNELS: ChannelFilter[] = ["all", "email", "inapp", "webhook"]
 // Mirrors the Status union — "duplicate" used to be offered here but never
 // matched a row, and "skipped" (the usual webhook outcome) was missing.
+const PRIORITIES: PriorityFilter[] = ["all", "high", "normal", "low"]
 const STATUSES: StatusFilter[]  = ["all", "delivered", "skipped", "failed", "dlq"]
 
 export function FilterBar({
-  channel, status, search, count,
-  onChannel, onStatus, onSearch, onClear,
+  channel, status, priority, search, count,
+  onChannel, onStatus, onPriority, onSearch, onClear,
   hasActiveFilter,
 }: FilterBarProps) {
   return (
@@ -57,6 +61,21 @@ export function FilterBar({
             className="capitalize h-7 text-xs"
           >
             {s}
+          </Button>
+        ))}
+      </div>
+
+      {/* Priority */}
+      <div className="flex items-center gap-1">
+        {PRIORITIES.map(p => (
+          <Button
+            key={p}
+            size="sm"
+            variant={priority === p ? "default" : "outline"}
+            onClick={() => onPriority(p)}
+            className="capitalize h-7 text-xs"
+          >
+            {p}
           </Button>
         ))}
       </div>

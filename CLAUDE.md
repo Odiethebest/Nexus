@@ -174,6 +174,7 @@ CREATE TABLE notifications (
   channel     TEXT        NOT NULL,  -- 'email' | 'inapp' | 'webhook'
   event_type  TEXT        NOT NULL,
   status      TEXT        NOT NULL,  -- 'delivered' | 'skipped' | 'failed' | 'dlq'
+  priority    TEXT        NOT NULL DEFAULT 'normal',  -- 'high' | 'normal' | 'low'
   payload     JSONB,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (message_id, channel)
@@ -183,7 +184,11 @@ CREATE TABLE notifications (
 CREATE INDEX notifications_created_at_idx ON notifications(created_at DESC);
 ```
 
-> **TODO**: `priority` column not yet in schema. Required before frontend can filter by priority — needs a migration. `status` and `channel` indexes also pending.
+> `Migrate` is idempotent and runs on boot in **both** services. It takes a transaction-scoped advisory lock first: `CREATE TABLE IF NOT EXISTS` is not concurrency-safe, and without the lock a cold start could kill one service on `pg_type_typname_nsp_index`. Adding a bind parameter to `Migrate` would switch pgx to the extended protocol and lose the implicit transaction the lock depends on.
+>
+> Adding `priority` backfills existing rows from `payload->>'priority'` (the stored envelope carries it) rather than stamping history `normal`.
+>
+> No `status` / `channel` / `priority` indexes: no query filters on them. `GetByMessageID` hits the primary key, `ListNotifications` and `ClearNotificationsBefore` use `created_at`, and the page filters its 50 rows client-side. They become worth adding only if filtering moves server-side.
 
 ### 3.2 Query Rules
 
@@ -215,7 +220,7 @@ CREATE INDEX notifications_created_at_idx ON notifications(created_at DESC);
 - Client-side rendering only (no SSR — data freshness is the priority)
 
 #### `/notifications` — Notification List
-- Filters: channel (email/inapp/webhook), status (delivered/skipped/failed/dlq)
+- Filters: channel (email/inapp/webhook), status (delivered/skipped/failed/dlq), priority (high/normal/low) — all client-side over the 50-row page
 - Pagination: 50 rows per page
 - Data source: `useNotifications` hook → `GET /notifications`
 
@@ -275,8 +280,8 @@ export interface Notification {
   message_id: string
   channel:    Channel
   event_type: string
-  // priority field not yet in DB schema — re-enable after migration
   status:     Status
+  priority:   Priority
   payload:    Record<string, unknown>
   created_at: string
 }

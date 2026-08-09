@@ -46,7 +46,7 @@ The system is split into two backend services:
 | Idempotency | Redis `SETNX`, key scoped by channel: `msg:<channel>:<id>` |
 | Retry-with-backoff | `x-retry-count` header, exponential 2s/4s/8s, MaxRetries=3 → DLQ |
 | DLQ | Dedicated topics `nexus.dlq.<channel>.<priority>`; `POST /dlq/replay` |
-| Cache-aside | `GET /notifications/{message_id}` → Redis (`cache:notif:<id>`, TTL 60s) → PostgreSQL |
+| Cache-aside | `GET /notifications/{message_id}` → Redis (`cache:notif:v2:<id>`, TTL 60s) → PostgreSQL |
 | Three-stage tracing | Histograms `nexus_stage_{ingest,processing,delivery}_duration_seconds` + `nexus_event_e2e_lag_seconds` |
 | Delivery history | PostgreSQL `notifications` table, `PK (message_id, channel)` |
 | Runtime visibility | Prometheus + provisioned Grafana dashboard (`Nexus — Kafka pipeline`) + WebSocket feed |

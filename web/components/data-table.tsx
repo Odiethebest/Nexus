@@ -46,6 +46,13 @@ const channelClass: Record<string, string> = {
 }
 
 // Keys are the statuses the worker actually persists (see the Status union).
+// Matches the live feed's EventCard so a priority reads the same in both views.
+const priorityClass: Record<string, string> = {
+  high:   "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+  normal: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+  low:    "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+}
+
 const statusClass: Record<string, string> = {
   delivered: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
   skipped:   "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
@@ -75,6 +82,15 @@ const columns: ColumnDef<Notification>[] = [
   {
     accessorKey: "event_type",
     header: "Event Type",
+  },
+  {
+    accessorKey: "priority",
+    header: "Priority",
+    cell: ({ row }) => (
+      <Badge className={priorityClass[row.original.priority] ?? ""} variant="outline">
+        {row.original.priority}
+      </Badge>
+    ),
   },
   {
     accessorKey: "status",
@@ -121,6 +137,7 @@ export function DataTable({ data, loading }: { data: Notification[] | null; load
                 <TableHead>ID</TableHead>
                 <TableHead>Channel</TableHead>
                 <TableHead>Event Type</TableHead>
+                <TableHead>Priority</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Time</TableHead>
               </TableRow>
@@ -131,6 +148,7 @@ export function DataTable({ data, loading }: { data: Notification[] | null; load
                   <TableCell><Skeleton className="h-4 w-16" /></TableCell>
                   <TableCell><Skeleton className="h-5 w-14 rounded-full" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                  <TableCell><Skeleton className="h-5 w-14 rounded-full" /></TableCell>
                   <TableCell><Skeleton className="h-5 w-18 rounded-full" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-16" /></TableCell>
                 </TableRow>
