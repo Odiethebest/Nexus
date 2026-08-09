@@ -33,15 +33,14 @@ export function useLoadTest() {
       setStatus('running')
       setError(null)
       setChartData([])
-      console.log('[loadtest] POST /ops/loadtest/start { mode: "demo" }')
-      const startResp = await startLoadTest('demo')
-      console.log('[loadtest] start response:', startResp)
+      // The run id comes back here, but polling uses /latest, so it is not
+      // needed — we only await to surface a start failure.
+      await startLoadTest('demo')
 
       pollRef.current = setInterval(async () => {
         try {
           const d = await getLoadTestLatest()
           const runStatus = d?.run?.status ?? d?.status
-          console.log('[loadtest] poll run.status:', runStatus)
           setResult(d)
 
           // Extract chart data from series tuples: [[ts, val], ...]
