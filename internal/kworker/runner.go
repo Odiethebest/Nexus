@@ -61,6 +61,10 @@ type Republisher interface {
 // unit-tested without a live PostgreSQL.
 type NotificationStore interface {
 	SaveNotification(ctx context.Context, n store.Notification) error
+	// HasNotification reports whether this (message_id, channel) was already
+	// written. It is the durable record of completion, used to second-guess
+	// the idempotency claim — see Runner.handle.
+	HasNotification(ctx context.Context, messageID, channel string) (bool, error)
 }
 
 // recordCommitter is the offset-commit half of *kgo.Client, split out for
@@ -94,6 +98,9 @@ type Runner struct {
 
 	client    *kgo.Client
 	committer recordCommitter
+	// inflight tracks records handed to the pool but not yet finished. The
+	// rebalance callback waits on it, so it must outlive a single Run loop.
+	inflight sync.WaitGroup
 	// backoff maps "retries already attempted" to the wait before the next
 	// one. Injectable so tests don't sit through the real 2s/4s/8s.
 	backoff func(retryCount int) time.Duration
@@ -113,26 +120,11 @@ func NewRunner(cfg kbroker.Config, opts RunnerOptions) (*Runner, error) {
 	topic := kbroker.TopicName(opts.Channel, opts.Priority)
 	group := kbroker.ConsumerGroup(opts.Channel, opts.Priority)
 
-	clientOpts := append(cfg.BaseOpts(),
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.DisableAutoCommit(),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		// Block rebalances while records are in-flight so we never lose
-		// an offset ack because a partition was revoked mid-processing.
-		kgo.BlockRebalanceOnPoll(),
-		kgo.SessionTimeout(30*time.Second),
-	)
-	client, err := kgo.NewClient(clientOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("kworker: new consumer client (%s): %w", topic, err)
-	}
-
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Runner{
+	r := &Runner{
 		Channel:     opts.Channel,
 		Priority:    opts.Priority,
 		PoolSize:    opts.PoolSize,
@@ -142,10 +134,52 @@ func NewRunner(cfg kbroker.Config, opts RunnerOptions) (*Runner, error) {
 		Republisher: opts.Republisher,
 		Feed:        opts.Feed,
 		Log:         log.With("channel", string(opts.Channel), "priority", string(opts.Priority)),
-		client:      client,
-		committer:   client,
 		backoff:     defaultRetryBackoff,
-	}, nil
+	}
+
+	clientOpts := append(cfg.BaseOpts(),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(group),
+		kgo.DisableAutoCommit(),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		// Block rebalances while records are in-flight so we never lose
+		// an offset ack because a partition was revoked mid-processing.
+		kgo.BlockRebalanceOnPoll(),
+		kgo.SessionTimeout(30*time.Second),
+		// Hold the rebalance until in-flight records have finished.
+		// BlockRebalanceOnPoll alone is not enough: it only defers
+		// revocation to the next AllowRebalance, and we call that as soon as
+		// a batch is dispatched, while the pool is still working.
+		kgo.OnPartitionsRevoked(r.awaitInflightBeforeRevoke),
+	)
+	client, err := kgo.NewClient(clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("kworker: new consumer client (%s): %w", topic, err)
+	}
+	r.client = client
+	r.committer = client
+	return r, nil
+}
+
+// awaitInflightBeforeRevoke blocks a rebalance until every record this
+// runner has in flight has finished.
+//
+// Without it a partition can move mid-processing: the original goroutine
+// then commits an offset for a partition it no longer owns (rejected), and
+// the new owner redelivers a record whose idempotency claim is still held.
+// It is also what makes the guarantee stated in deploy/railway.worker.toml
+// true rather than aspirational.
+//
+// The wait is bounded by the slowest in-flight record. The worst case is a
+// record sleeping out the 8s retry backoff, comfortably inside franz-go's
+// 60s rebalance timeout.
+func (r *Runner) awaitInflightBeforeRevoke(_ context.Context, _ *kgo.Client, revoked map[string][]int32) {
+	start := time.Now()
+	r.inflight.Wait()
+	if waited := time.Since(start); waited > time.Second {
+		r.Log.Info("held rebalance for in-flight records",
+			"waited", waited.Round(time.Millisecond), "partitions", revoked)
+	}
 }
 
 // RunnerOptions bundles the per-lane construction inputs.
@@ -174,16 +208,15 @@ func (r *Runner) Client() *kgo.Client { return r.client }
 // all in-flight records have either committed or been marked failed.
 func (r *Runner) Run(ctx context.Context) error {
 	sem := make(chan struct{}, r.PoolSize)
-	var wg sync.WaitGroup
 
 	defer func() {
-		wg.Wait() // drain in-flight before closing
-		// Commit whatever the pool successfully finished before shutdown.
-		commitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := r.client.CommitUncommittedOffsets(commitCtx); err != nil {
-			r.Log.Warn("commit uncommitted on shutdown", "err", err)
-		}
+		r.inflight.Wait() // drain in-flight before closing
+		// No blanket commit here on purpose. franz-go refreshes its
+		// "uncommitted" set on every PollFetches, so committing it would
+		// also commit records the handler deliberately left uncommitted for
+		// redelivery — a Redis blip during the last batch would silently
+		// drop those messages. Records that finished already committed their
+		// own offset; anything else has to come back.
 		r.client.Close()
 	}()
 
@@ -211,9 +244,9 @@ func (r *Runner) Run(ctx context.Context) error {
 				r.client.AllowRebalance()
 				return ctx.Err()
 			}
-			wg.Add(1)
+			r.inflight.Add(1)
 			go func(rec *kgo.Record) {
-				defer wg.Done()
+				defer r.inflight.Done()
 				defer func() { <-sem }()
 				r.handle(ctx, rec)
 			}(rec)
@@ -267,9 +300,33 @@ func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 		return
 	}
 	if !ok {
-		metrics.MessagesProcessed.WithLabelValues(channelLabel, "duplicate").Inc()
-		r.commit(ctx, rec)
-		return
+		// The claim is held — but a claim is taken *before* the work, so it
+		// only proves some worker started, not that it finished. If the
+		// previous holder died between the SETNX and the PostgreSQL write
+		// (SIGKILL, OOM, pod eviction), no row exists and skipping here
+		// would drop the message silently until the 24h TTL expires.
+		//
+		// PostgreSQL is the only durable record of completion, so ask it.
+		// This costs one primary-key lookup, and only on the duplicate path.
+		persisted, err := r.Store.HasNotification(ctx, msgID, channelLabel)
+		if err != nil {
+			r.Log.Error("confirm duplicate against store", "msg_id", msgID, "err", err)
+			// Don't commit — an unverified skip is how messages disappear.
+			return
+		}
+		if persisted {
+			metrics.MessagesProcessed.WithLabelValues(channelLabel, "duplicate").Inc()
+			r.commit(ctx, rec)
+			return
+		}
+		// Claim without a row: the earlier attempt died mid-flight. Redo it.
+		// Two workers racing the same record can both land here and both
+		// deliver, which is the correct trade for an at-least-once pipeline —
+		// a duplicate notification beats a lost one, and the PG upsert keeps
+		// history single-rowed either way.
+		metrics.MessagesProcessed.WithLabelValues(channelLabel, "orphaned_claim").Inc()
+		r.Log.Warn("idempotency claim held but nothing persisted; reprocessing",
+			"msg_id", msgID)
 	}
 
 	var event kbroker.Event

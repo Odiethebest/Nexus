@@ -3,6 +3,7 @@ package kworker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strconv"
@@ -59,11 +60,30 @@ func (f *fakeRepublisher) DLQ(_ context.Context, rec *kgo.Record, dlqTopic strin
 	return nil
 }
 
-type fakeStore struct{ saved []store.Notification }
+type fakeStore struct {
+	saved   []store.Notification
+	hasErr  error // when set, HasNotification fails
+	hasCall int
+}
 
 func (f *fakeStore) SaveNotification(_ context.Context, n store.Notification) error {
 	f.saved = append(f.saved, n)
 	return nil
+}
+
+// HasNotification answers from what SaveNotification has recorded, so the
+// fake behaves like the real primary-key lookup.
+func (f *fakeStore) HasNotification(_ context.Context, messageID, channel string) (bool, error) {
+	f.hasCall++
+	if f.hasErr != nil {
+		return false, f.hasErr
+	}
+	for _, n := range f.saved {
+		if n.MessageID == messageID && n.Channel == channel {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (f *fakeStore) statuses() []string {
@@ -303,6 +323,82 @@ func TestHandleToleratesNilFeed(t *testing.T) {
 
 	if got := st.statuses(); len(got) != 1 || got[0] != "delivered" {
 		t.Errorf("persisted statuses = %v, want [delivered]", got)
+	}
+}
+
+// Regression: the idempotency claim is taken before the work, so its
+// presence does not prove the work finished. A worker killed between the
+// SETNX and the PostgreSQL write left a claim with no row, and the
+// redelivered record was skipped as a duplicate — losing the message for
+// the 24h TTL. The durable store is now the authority.
+func TestHandleReprocessesWhenClaimIsHeldButNothingPersisted(t *testing.T) {
+	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeDelivered}}
+	r, _, st, com, _ := newTestRunner(t, proc)
+	ctx := context.Background()
+	rec := testRecord(t, "msg-orphan", 0)
+
+	// Simulate a previous attempt that claimed and then died: the claim
+	// exists, but it never wrote a row.
+	if ok, err := r.Idempotency.CheckScoped(ctx, string(kbroker.ChannelWebhook), "msg-orphan"); err != nil || !ok {
+		t.Fatalf("failed to pre-seed the orphaned claim (ok=%v err=%v)", ok, err)
+	}
+
+	r.handle(ctx, rec)
+
+	if proc.calls != 1 {
+		t.Fatalf("Deliver called %d times, want 1 — the orphaned claim must not suppress delivery", proc.calls)
+	}
+	if got := st.statuses(); len(got) != 1 || got[0] != "delivered" {
+		t.Errorf("persisted statuses = %v, want [delivered]", got)
+	}
+	if com.commits != 1 {
+		t.Errorf("commits = %d, want 1", com.commits)
+	}
+}
+
+// The store lookup must not turn a genuine duplicate into a redelivery.
+func TestHandleStillSkipsWhenTheRowExists(t *testing.T) {
+	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeDelivered}}
+	r, _, st, com, feed := newTestRunner(t, proc)
+	ctx := context.Background()
+	rec := testRecord(t, "msg-real-dupe", 0)
+
+	r.handle(ctx, rec) // writes the row and the claim
+	r.handle(ctx, rec) // redelivery: claim held AND row present
+
+	if proc.calls != 1 {
+		t.Fatalf("Deliver called %d times, want 1 — a confirmed duplicate must be skipped", proc.calls)
+	}
+	if st.hasCall == 0 {
+		t.Error("the duplicate path never consulted the store")
+	}
+	if len(st.saved) != 1 || len(feed.sent) != 1 {
+		t.Errorf("duplicate leaked: %d rows, %d feed envelopes", len(st.saved), len(feed.sent))
+	}
+	if com.commits != 2 {
+		t.Errorf("commits = %d, want 2 (the duplicate is committed, not left dangling)", com.commits)
+	}
+}
+
+// If the store cannot answer, skipping would be an unverified guess. Leave
+// the record uncommitted so a later poll retries it.
+func TestHandleLeavesRecordUncommittedWhenTheStoreLookupFails(t *testing.T) {
+	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeDelivered}}
+	r, _, st, com, _ := newTestRunner(t, proc)
+	ctx := context.Background()
+
+	if _, err := r.Idempotency.CheckScoped(ctx, string(kbroker.ChannelWebhook), "msg-store-down"); err != nil {
+		t.Fatalf("seed claim: %v", err)
+	}
+	st.hasErr = errors.New("postgres unavailable")
+
+	r.handle(ctx, testRecord(t, "msg-store-down", 0))
+
+	if proc.calls != 0 {
+		t.Errorf("Deliver called %d times, want 0", proc.calls)
+	}
+	if com.commits != 0 {
+		t.Errorf("commits = %d, want 0 — an unverified skip is how messages disappear", com.commits)
 	}
 }
 
