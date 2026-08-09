@@ -53,9 +53,19 @@ type SummarySnapshot struct {
 	E2ELagP99Seconds    float64        `json:"e2e_lag_p99_seconds"`
 	QueueDepth          map[string]int `json:"queue_depth"`
 	DeliverySuccessRate float64        `json:"delivery_success_rate"`
-	DLQCount            int            `json:"dlq_count"`
-	ActiveWSConnections int            `json:"active_ws_connections"`
-	UptimeSeconds       int            `json:"uptime_seconds"`
+
+	// DLQCount is the sum of DLQDepth.
+	DLQCount int `json:"dlq_count"`
+
+	// DLQDepth breaks the dead-letter count out per lane, keyed
+	// "<channel>_<priority>" to match QueueDepth. Sourced from
+	// nexus_dlq_messages_total, which samples DLQ topic end offsets — so
+	// these are cumulative totals of everything ever dead-lettered, not a
+	// pending-work backlog. Replay does not lower them.
+	DLQDepth map[string]int `json:"dlq_depth"`
+
+	ActiveWSConnections int `json:"active_ws_connections"`
+	UptimeSeconds       int `json:"uptime_seconds"`
 }
 
 // channels is the fixed set of delivery channels the summary reports on.
@@ -213,6 +223,7 @@ func ComputeSummary(wsCount int) SummarySnapshot {
 
 	// per-lane gauges (channel, priority) → value
 	queueDepth := map[string]int{}
+	dlqDepth := map[string]int{}
 	dlqTotal := 0
 	// cumulative counters per channel, fed to the rate trackers below
 	processedByChannel := map[string]float64{}
@@ -292,21 +303,18 @@ func ComputeSummary(wsCount int) SummarySnapshot {
 					continue
 				}
 				dlqTotal += int(g.GetValue())
+				channel, priority := labelValue(m, "channel"), labelValue(m, "priority")
+				if channel != "" && priority != "" {
+					dlqDepth[channel+"_"+priority] = int(g.GetValue())
+				}
 			}
 		}
 	}
 
-	if len(queueDepth) == 0 {
-		queueDepth = emptyQueueDepth()
-	} else {
-		// Backfill any missing lane so the response shape is stable for
-		// frontend consumers.
-		for k := range emptyQueueDepth() {
-			if _, ok := queueDepth[k]; !ok {
-				queueDepth[k] = 0
-			}
-		}
-	}
+	// Backfill missing lanes so the response shape is stable for frontend
+	// consumers whether or not a lane has reported yet.
+	queueDepth = withAllLanes(queueDepth)
+	dlqDepth = withAllLanes(dlqDepth)
 
 	var successRate float64
 	if processedTotal > 0 {
@@ -331,6 +339,7 @@ func ComputeSummary(wsCount int) SummarySnapshot {
 		QueueDepth:                   queueDepth,
 		DeliverySuccessRate:          safeFloat(successRate),
 		DLQCount:                     dlqTotal,
+		DLQDepth:                     dlqDepth,
 		ActiveWSConnections:          wsCount,
 		UptimeSeconds:                int(time.Since(startTime).Seconds()),
 	}
@@ -432,10 +441,23 @@ func safeFloat(v float64) float64 {
 	return v
 }
 
-func emptyQueueDepth() map[string]int {
-	return map[string]int{
-		"email_high": 0, "email_normal": 0, "email_low": 0,
-		"inapp_high": 0, "inapp_normal": 0, "inapp_low": 0,
-		"webhook_high": 0, "webhook_normal": 0, "webhook_low": 0,
+// priorities mirrors kbroker.Priorities, kept as plain strings for the same
+// reason as channels.
+var priorities = []string{"high", "normal", "low"}
+
+// withAllLanes returns m with every "<channel>_<priority>" key present,
+// zero-filling the ones that have not reported.
+func withAllLanes(m map[string]int) map[string]int {
+	if m == nil {
+		m = make(map[string]int, len(channels)*len(priorities))
 	}
+	for _, ch := range channels {
+		for _, p := range priorities {
+			key := ch + "_" + p
+			if _, ok := m[key]; !ok {
+				m[key] = 0
+			}
+		}
+	}
+	return m
 }
