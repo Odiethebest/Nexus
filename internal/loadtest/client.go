@@ -207,12 +207,14 @@ func (c *Client) QueryRangeK6(
 	query string,
 	stepSeconds int,
 ) ([]MetricPoint, error) {
-	path := fmt.Sprintf("/cloud/v5/test_runs/%d/query_range_k6", runID)
-	path = buildK6OperationPath(path, []k6OperationParam{
+	params := []k6OperationParam{
 		{key: "metric", value: metric, quoted: true},
 		{key: "query", value: query, quoted: true},
-		{key: "step", value: strconv.Itoa(stepSeconds), quoted: false, include: stepSeconds > 0},
-	})
+	}
+	if stepSeconds > 0 {
+		params = append(params, k6OperationParam{key: "step", value: strconv.Itoa(stepSeconds)})
+	}
+	path := buildK6OperationPath(fmt.Sprintf("/cloud/v5/test_runs/%d/query_range_k6", runID), params)
 
 	raw, err := c.doJSON(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
@@ -249,58 +251,6 @@ func (c *Client) QueryRangeK6(
 		}
 	}
 	return sortedPoints(merged), nil
-}
-
-// QueryAggregateK6 returns a scalar aggregate value for a metric query.
-func (c *Client) QueryAggregateK6(
-	ctx context.Context,
-	runID int64,
-	metric string,
-	query string,
-) (float64, error) {
-	path := fmt.Sprintf("/cloud/v5/test_runs/%d/query_aggregate_k6", runID)
-	path = buildK6OperationPath(path, []k6OperationParam{
-		{key: "metric", value: metric, quoted: true},
-		{key: "query", value: query, quoted: true},
-	})
-
-	raw, err := c.doJSON(ctx, http.MethodGet, path, nil, nil)
-	if err != nil {
-		return 0, err
-	}
-
-	var resp struct {
-		Status string `json:"status"`
-		Data   struct {
-			Result []struct {
-				Values [][]any `json:"values"`
-				Value  []any   `json:"value"`
-			} `json:"result"`
-		} `json:"data"`
-	}
-	if err := decodeAny(raw, &resp); err != nil {
-		return 0, fmt.Errorf("loadtest: decode aggregate query: %w", err)
-	}
-
-	var sum float64
-	for _, series := range resp.Data.Result {
-		var rawValue any
-		switch {
-		case len(series.Values) > 0 && len(series.Values[len(series.Values)-1]) >= 2:
-			rawValue = series.Values[len(series.Values)-1][1]
-		case len(series.Value) >= 2:
-			rawValue = series.Value[1]
-		default:
-			continue
-		}
-
-		v, err := parseFloat(rawValue)
-		if err != nil {
-			continue
-		}
-		sum += v
-	}
-	return sum, nil
 }
 
 func (c *Client) doJSON(
@@ -538,33 +488,27 @@ func classifyUpstreamEndpoint(path string) string {
 }
 
 type k6OperationParam struct {
-	key     string
-	value   string
-	quoted  bool
-	include bool
+	key    string
+	value  string
+	quoted bool // string arguments are single-quoted and path-escaped
 }
 
+// buildK6OperationPath renders k6's operation-call path syntax,
+// `.../query_range_k6(metric='http_reqs',query='rate',step=3)`.
+//
+// It formats exactly what it is handed; whether an optional argument belongs
+// in the call is the caller's decision. This used to carry an `include` flag
+// whose interaction with `quoted` meant "unquoted arguments are dropped
+// unless explicitly flagged" — not something you could read off a call site.
 func buildK6OperationPath(base string, params []k6OperationParam) string {
-	if len(params) == 0 {
-		return base
-	}
-
 	parts := make([]string, 0, len(params))
 	for _, param := range params {
-		if param.key == "" {
+		if param.key == "" || param.value == "" {
 			continue
 		}
-		if !param.include && param.value == "" {
-			continue
-		}
-		if !param.include && !param.quoted {
-			continue
-		}
-
 		value := param.value
 		if param.quoted {
-			value = quoteK6Param(value)
-			value = url.PathEscape(value)
+			value = url.PathEscape(quoteK6Param(value))
 		}
 		parts = append(parts, param.key+"="+value)
 	}

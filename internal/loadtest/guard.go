@@ -162,14 +162,6 @@ func (g *Guard) MarkFinished(runID int64, now time.Time) bool {
 	return true
 }
 
-// IsActive reports if a run is tracked as active.
-func (g *Guard) IsActive(runID int64) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	_, ok := g.activeRunStartedAt[runID]
-	return ok
-}
-
 // ActiveCount returns active run count (excluding in-flight starts).
 func (g *Guard) ActiveCount() int {
 	g.mu.Lock()
@@ -183,18 +175,4 @@ func (g *Guard) ActiveRunStartedAt(runID int64) (time.Time, bool) {
 	defer g.mu.Unlock()
 	startedAt, ok := g.activeRunStartedAt[runID]
 	return startedAt, ok
-}
-
-// CooldownRemaining returns current cooldown remainder.
-func (g *Guard) CooldownRemaining(now time.Time) time.Duration {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.cfg.Cooldown <= 0 || g.lastFinishedAt.IsZero() {
-		return 0
-	}
-	remaining := g.cfg.Cooldown - now.Sub(g.lastFinishedAt)
-	if remaining < 0 {
-		return 0
-	}
-	return remaining
 }
