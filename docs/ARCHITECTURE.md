@@ -143,11 +143,18 @@ upstream is not going to start accepting it); a malformed URL is permanent.
 | `channel` | `email` \| `inapp` \| `webhook` |
 | `event_type` | caller-supplied |
 | `status` | `delivered` \| `skipped` \| `failed` \| `dlq` |
+| `priority` | `high` \| `normal` \| `low`, `NOT NULL DEFAULT 'normal'` |
 | `payload` | `JSONB`, the full event envelope |
 | `created_at` | `TIMESTAMPTZ`, indexed `DESC` |
 
 Primary key `(message_id, channel)`; `SaveNotification` upserts on it, so a
 retry that eventually succeeds overwrites its own earlier `failed` row.
+
+`Migrate` runs on boot in both services and is guarded by a
+transaction-scoped advisory lock — `CREATE TABLE IF NOT EXISTS` races between
+two sessions and one dies on `pg_type_typname_nsp_index`. When `priority` was
+added, existing rows were backfilled from `payload->>'priority'` rather than
+defaulted, because the stored envelope already carried the real value.
 
 There is no `duplicate` status: a duplicate is committed without persisting,
 so it appears only as the
@@ -157,8 +164,8 @@ so it appears only as the
 
 | Path | Key | TTL | Scope label |
 |---|---|---|---|
-| `GET /notifications/{message_id}` | `cache:notif:<id>` | 60s | `by_id` |
-| `GET /notifications` | `cache:notif:list:v1:<limit>` | 2s | `list` |
+| `GET /notifications/{message_id}` | `cache:notif:v2:<id>` | 60s | `by_id` |
+| `GET /notifications` | `cache:notif:list:v2:<limit>` | 2s | `list` |
 
 `by_id` is the hot path and the one the RUNBOOK's hit-rate figure measures.
 A Redis error on read propagates; a failed refill is swallowed (the next read
