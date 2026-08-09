@@ -24,7 +24,10 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { useLoadTest } from "@/hooks/useLoadTest"
+import type { LoadTestMode } from "@/lib/api"
 import { useMetrics } from "@/hooks/useMetrics"
 
 /**
@@ -61,11 +64,19 @@ function RunningTimer() {
 export default function LoadTestPage() {
   const { status, result, chartData, error, start, reset } = useLoadTest()
   const { latest, loading: metricsLoading } = useMetrics()
+  const [mode, setMode] = useState<LoadTestMode>("demo")
+  // Kept in component state only, never persisted: it is the server's admin
+  // secret and has no business surviving in localStorage.
+  const [adminKey, setAdminKey] = useState("")
 
   useEffect(() => { document.title = "Load Test — Nexus" }, [])
 
   const running   = status === 'running'
   const completed = status === 'completed'
+  const isReal    = mode === "real"
+  // Real mode is rejected server-side without the key, so do not let the
+  // request go out only to come back 403.
+  const canStart  = !running && (!isReal || adminKey.trim() !== "")
 
   return (
     <SidebarProvider
@@ -82,27 +93,64 @@ export default function LoadTestPage() {
         <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
           <div className="px-4 lg:px-6">
             <p className="text-sm text-muted-foreground mb-4">
-              Run a demo load test to see the system under pressure
+              Run a load test and watch the pipeline under pressure
             </p>
 
             {/* Control panel */}
             <Card className="mb-4">
               <CardHeader>
-                <CardTitle>Demo Mode</CardTitle>
+                <CardTitle>{isReal ? "Real Mode — Grafana Cloud k6" : "Demo Mode"}</CardTitle>
                 <CardDescription>
-                  Simulates ~55 seconds of sustained traffic across all channels and priority levels.
+                  {isReal
+                    ? "Starts the configured k6 Cloud test against this deployment and streams its real series. Requires the producer to run with LOADTEST_ENABLED=true and valid K6_* credentials — see k6/README.md."
+                    : "Synthetic ~55s run. Generates no real traffic; the metric cards above the chart show the live pipeline, not this run."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
+                {/* Mode */}
+                <div className="flex items-center gap-1">
+                  {(["demo", "real"] as LoadTestMode[]).map(m => (
+                    <Button
+                      key={m}
+                      size="sm"
+                      variant={mode === m ? "default" : "outline"}
+                      disabled={running}
+                      onClick={() => setMode(m)}
+                      className="capitalize h-7 text-xs"
+                    >
+                      {m}
+                    </Button>
+                  ))}
+                </div>
+
+                {isReal && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="admin-key" className="text-xs">Admin key</Label>
+                    <Input
+                      id="admin-key"
+                      type="password"
+                      autoComplete="off"
+                      placeholder="LOADTEST_ADMIN_KEY"
+                      value={adminKey}
+                      onChange={e => setAdminKey(e.target.value)}
+                      disabled={running}
+                      className="h-8 w-72 text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Sent as <code>X-Admin-Key</code>. Held in memory for this tab only.
+                    </p>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-4">
                   <Button
                     size="lg"
-                    disabled={running}
-                    onClick={start}
+                    disabled={!canStart}
+                    onClick={() => start(mode, isReal ? adminKey.trim() : undefined)}
                     className="gap-2"
                   >
                     <PlayIcon className="h-4 w-4" />
-                    Start Demo
+                    {isReal ? "Start Cloud Run" : "Start Demo"}
                   </Button>
                   <ElapsedTimer running={running} />
                   {completed && (

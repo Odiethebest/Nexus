@@ -97,6 +97,8 @@ The partition count is deliberately derived, not guessed. From `KAFKA_TOPIC_PART
 > **target throughput ÷ per-partition throughput (empirical: 5–10K msg/s) + ~30% headroom**
 >
 > Example: **50 000 msg/s ÷ 5 000 msg/s/partition ≈ 10 partitions, +30% → 12 partitions.**
+>
+> 50 000/s is the figure the sizing is *derived for*, not one this deployment has hit. Measured ceilings live in [k6/README.md](./k6/README.md) and `RUNBOOK.md`.
 
 Effective parallelism per consumer group = `min(partition count, consumer instance count × goroutines-per-instance)`. Scale horizontally by adding more worker replicas (`docker compose up -d --scale worker=3`) — the group coordinator rebalances partitions across them.
 

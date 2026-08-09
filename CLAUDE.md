@@ -81,7 +81,7 @@ Permanent  → produce to nexus.dlq.<channel>.<priority>
 | Design | Rationale |
 |---|---|
 | Per-lane topics + per-lane consumer groups | High-priority lane's committed offset never depends on a slow low-priority lane |
-| franz-go async Produce + acks=all + idempotent producer | Supports 50K/s ceiling without the single-inflight-confirm bottleneck of the AMQP publisher; broker-side dedup on retries |
+| franz-go async Produce + acks=all + idempotent producer | Removes the single-inflight-confirm bottleneck the AMQP publisher had; broker-side dedup on retries. Measured ceiling on the local stack is ~520 events/s within the p99<50ms SLO (`k6/README.md`) — the 50K/s figure is what partition sizing is derived *for*, not a measurement |
 | `x-retry-count` in record header (not `x-death`) | Kafka has no built-in redelivery count; header is portable and survives DLQ round-trips |
 | `x-produced-at` preserved across retries + DLQ | e2e lag histogram measures true event age, not "time since last retry" |
 | Scoped Redis idempotency `msg:<channel>:<id>` | Fan-out event persists correctly in all three channels (bug fixed in Step 10 of MIGRATION.md) |

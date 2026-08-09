@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { startLoadTest, getLoadTestLatest } from '@/lib/api'
+import { startLoadTest, getLoadTestLatest, type LoadTestMode } from '@/lib/api'
 
 export type LoadTestStatus = 'idle' | 'running' | 'completed' | 'error'
 
@@ -28,14 +28,14 @@ export function useLoadTest() {
   const [error,     setError]     = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const start = async () => {
+  const start = async (mode: LoadTestMode = 'demo', adminKey?: string) => {
     try {
       setStatus('running')
       setError(null)
       setChartData([])
       // The run id comes back here, but polling uses /latest, so it is not
       // needed — we only await to surface a start failure.
-      await startLoadTest('demo')
+      await startLoadTest(mode, adminKey)
 
       pollRef.current = setInterval(async () => {
         try {
