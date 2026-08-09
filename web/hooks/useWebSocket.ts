@@ -28,21 +28,31 @@ function fromNotification(n: Notification): WsEvent {
 export function useWebSocket() {
   const [events, setEvents] = useState<WsEvent[]>([])
   const [connected, setConnected] = useState(false)
+  /**
+   * True until the history backfill settles. Consumers show skeletons on it
+   * instead of tracking a "mounted" flag: that flag went true the moment the
+   * component mounted, so the empty state flashed while the backfill was
+   * still in flight.
+   */
+  const [loading, setLoading] = useState(true)
   const wsRef = useRef<WebSocket | null>(null)
   const closedByUs = useRef(false)
 
   useEffect(() => {
     const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8080/ws'
     closedByUs.current = false
+    let cancelled = false
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
     // Pre-populate from history so the feed isn't empty on mount.
     getNotifications()
       .then((data: unknown) => {
+        if (cancelled) return
         const list = Array.isArray(data) ? (data as Notification[]) : []
         setEvents(list.slice(0, BACKFILL_LIMIT).map(fromNotification))
       })
       .catch(() => {/* ignore — live events still arrive over the socket */})
+      .finally(() => { if (!cancelled) setLoading(false) })
 
     const connect = () => {
       const ws = new WebSocket(WS_URL)
@@ -67,6 +77,7 @@ export function useWebSocket() {
 
     connect()
     return () => {
+      cancelled = true
       closedByUs.current = true
       if (reconnectTimer) clearTimeout(reconnectTimer)
       wsRef.current?.close()
@@ -74,5 +85,5 @@ export function useWebSocket() {
   }, [])
 
   const clear = () => setEvents([])
-  return { events, connected, clear }
+  return { events, connected, loading, clear }
 }

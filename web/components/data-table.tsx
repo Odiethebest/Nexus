@@ -93,7 +93,9 @@ const columns: ColumnDef<Notification>[] = [
 ]
 
 export function DataTable({ data, loading }: { data: Notification[] | null; loading?: boolean }) {
-  const safeData = data ?? []
+  // Memoised so the identity is stable across renders; a bare `data ?? []`
+  // allocates a new array every render and defeats the memo below.
+  const safeData = React.useMemo(() => data ?? [], [data])
 
   const groupedIds = React.useMemo(() => {
     const counts = new Map<string, number>()

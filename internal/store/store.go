@@ -72,6 +72,26 @@ func (s *Store) SaveNotification(ctx context.Context, n Notification) error {
 	return nil
 }
 
+// HasNotification reports whether a delivery row already exists for this
+// (message_id, channel) pair — a primary-key lookup.
+//
+// This is the durable answer to "was this message already handled?". The
+// Redis idempotency entry cannot answer it on its own: that claim is taken
+// *before* the work, so its presence only proves some worker started, not
+// that it finished.
+func (s *Store) HasNotification(ctx context.Context, messageID, channel string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM notifications WHERE message_id = $1 AND channel = $2
+		)
+	`, messageID, channel).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("store: has notification: %w", err)
+	}
+	return exists, nil
+}
+
 // ListNotifications returns the most recent notifications up to limit.
 func (s *Store) ListNotifications(ctx context.Context, limit int) ([]Notification, error) {
 	rows, err := s.db.QueryContext(ctx, `

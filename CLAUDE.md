@@ -86,7 +86,8 @@ Permanent  → produce to nexus.dlq.<channel>.<priority>
 | `x-produced-at` preserved across retries + DLQ | e2e lag histogram measures true event age, not "time since last retry" |
 | Scoped Redis idempotency `msg:<channel>:<id>` | Fan-out event persists correctly in all three channels (bug fixed in Step 10 of MIGRATION.md) |
 | DLQ = separate topics + dedicated `nexus.replay` consumer group | Replay is a normal Kafka consume operation; no admin ops needed |
-| Manual `CommitRecords` after PG upsert + `BlockRebalanceOnPoll` | Rolling deploys / SIGTERM never lose an in-flight record (at-least-once) |
+| Manual `CommitRecords` after PG upsert + `BlockRebalanceOnPoll` + `OnPartitionsRevoked` wait | Rolling deploys / SIGTERM never lose an in-flight record (at-least-once). Revocation blocks until the pool drains, and shutdown never bulk-commits — franz-go's "uncommitted" set is everything *polled*, so committing it would swallow records left uncommitted on purpose |
+| Duplicate skip confirmed against PostgreSQL, not just Redis | The Redis claim is taken *before* the work, so it only proves a worker started. A crash between `SETNX` and the row write would otherwise drop the message for the full 24h TTL; the durable row is the real completion record |
 | Cache-aside `GET /notifications/{id}` (TTL 60s, scope=`by_id`) | Repeat lookups of the same recently-fanned-out msg are the hot pattern → 95% hit rate under load |
 | Three-stage tracing: `nexus_stage_{ingest,processing,delivery}_duration_seconds` + `nexus_event_e2e_lag_seconds` | Distinguishes producer-side / worker-side / downstream-side slowness in one dashboard |
 | Load test demo mode | Deterministic UI demo without k6 Cloud quota |
