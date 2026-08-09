@@ -29,8 +29,6 @@ export default function LivePage() {
     setMounted(true)
   }, [])
 
-  console.log('[filter] channelFilter:', channelFilter, 'events with email:', events.filter(e => e.channel === 'email').length)
-
   const filtered = (events ?? [])
     .filter(e => channelFilter === "all" || e.channel === channelFilter)
     .filter(e => priorityFilter === "all" || e.priority === priorityFilter)

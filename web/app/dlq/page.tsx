@@ -38,18 +38,22 @@ import {
 import { replayDLQ } from "@/lib/api"
 import { useMetrics } from "@/hooks/useMetrics"
 
-// DLQ queue names as declared in internal/worker/*
-const DLQ_QUEUES = [
-  { name: "nexus.email.dlq.high",    label: "email / high" },
-  { name: "nexus.email.dlq.normal",  label: "email / normal" },
-  { name: "nexus.email.dlq.low",     label: "email / low" },
-  { name: "nexus.inapp.dlq.high",    label: "inapp / high" },
-  { name: "nexus.inapp.dlq.normal",  label: "inapp / normal" },
-  { name: "nexus.inapp.dlq.low",     label: "inapp / low" },
-  { name: "nexus.webhook.dlq.high",  label: "webhook / high" },
-  { name: "nexus.webhook.dlq.normal",label: "webhook / normal" },
-  { name: "nexus.webhook.dlq.low",   label: "webhook / low" },
-]
+const CHANNELS = ["email", "inapp", "webhook"] as const
+const PRIORITIES = ["high", "normal", "low"] as const
+
+/**
+ * The nine DLQ topics. `topic` is the Kafka-native name
+ * (`nexus.dlq.<channel>.<priority>`) that `POST /dlq/replay` expects;
+ * `depthKey` matches the `<channel>_<priority>` keys in the summary's
+ * `dlq_depth` map.
+ */
+const DLQ_QUEUES = CHANNELS.flatMap(channel =>
+  PRIORITIES.map(priority => ({
+    topic:    `nexus.dlq.${channel}.${priority}`,
+    depthKey: `${channel}_${priority}`,
+    label:    `${channel} / ${priority}`,
+  }))
+)
 
 export default function DLQPage() {
   const { latest, loading, error, refresh } = useMetrics()
@@ -57,17 +61,19 @@ export default function DLQPage() {
   useEffect(() => { document.title = "DLQ — Nexus" }, [])
 
   const dlqTotal = latest?.dlq_count ?? 0
-  // TODO: backend should expose dlq_depth separately — queue_depth currently shows main queue depths
-  const queueDepth = latest?.queue_depth ?? {}
+  // Real per-lane dead-letter counts. This table used to read `queue_depth`,
+  // which is the *primary* lane backlog — it showed healthy main-lane numbers
+  // under a "DLQ" heading.
+  const dlqDepth = latest?.dlq_depth ?? {}
 
   const handleReplayAll = async () => {
     try {
       let total = 0
       for (const q of DLQ_QUEUES) {
         try {
-          const r = await replayDLQ(q.name, 100)
+          const r = await replayDLQ(q.topic, 100)
           total += r?.replayed ?? 0
-        } catch {}
+        } catch {/* a lane with nothing to replay is not an error */}
       }
       toast.success(`Replayed ${total} message${total !== 1 ? "s" : ""} from DLQ`)
       setTimeout(() => refresh(), 3000)
@@ -167,27 +173,27 @@ export default function DLQPage() {
           {/* Queue breakdown table */}
           <Card>
             <CardHeader>
-              <CardTitle>Queue Depth Breakdown</CardTitle>
+              <CardTitle>Dead-Letter Breakdown by Lane</CardTitle>
               <CardDescription>
-                Main queue depths — {/* TODO: backend should expose dlq_depth separately */}
-                DLQ depths not yet tracked individually by backend.
+                Records dead-lettered per <code>nexus.dlq.&lt;channel&gt;.&lt;priority&gt;</code> topic.
+                Sampled from topic end offsets, so these are cumulative totals —
+                a successful replay re-processes the records but does not lower the count.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Queue</TableHead>
-                    <TableHead className="text-right">Depth</TableHead>
+                    <TableHead>Lane</TableHead>
+                    <TableHead className="text-right">Dead-lettered</TableHead>
                     <TableHead className="text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {DLQ_QUEUES.map(q => {
-                    const depthKey = q.name.replace("nexus.", "").replace(".dlq", "").replace(/\./g, "_")
-                    const depth = queueDepth[depthKey] ?? 0
+                    const depth = dlqDepth[q.depthKey] ?? 0
                     return (
-                      <TableRow key={q.name}>
+                      <TableRow key={q.topic}>
                         <TableCell className="font-mono text-xs">{q.label}</TableCell>
                         <TableCell className="text-right">
                           <Badge variant={depth > 0 ? "destructive" : "outline"}>{depth}</Badge>
@@ -197,9 +203,10 @@ export default function DLQPage() {
                             size="sm"
                             variant="ghost"
                             className="h-6 text-xs"
+                            disabled={depth === 0}
                             onClick={async () => {
                               try {
-                                const r = await replayDLQ(q.name)
+                                const r = await replayDLQ(q.topic)
                                 toast.success(`Replayed ${r?.replayed ?? 0} messages from ${q.label}`)
                                 setTimeout(() => refresh(), 3000)
                               } catch (e) {

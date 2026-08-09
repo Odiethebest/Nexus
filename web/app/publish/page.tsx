@@ -99,10 +99,7 @@ export default function PublishPage() {
     setSubmitting(true)
     try {
       const body = { type: form.eventType, priority: form.priority, payload: parsedPayload }
-      console.log("[publish] priority:", form.priority)
-      console.log("[publish] POST /events body:", JSON.stringify(body))
       const result = await postEvent(body)
-      console.log("[publish] response:", result)
       toast.success(`Event published — message_id: ${result.message_id}`, {
         action: {
           label: "View in Live Feed →",

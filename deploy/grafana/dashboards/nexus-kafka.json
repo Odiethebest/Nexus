@@ -1,5 +1,7 @@
 {
-  "annotations": {"list": []},
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -10,8 +12,16 @@
       "type": "timeseries",
       "title": "Consumer lag (records) by lane",
       "id": 1,
-      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "nexus_consumer_lag_records",
@@ -19,15 +29,28 @@
           "refId": "A"
         }
       ],
-      "options": {"legend": {"placement": "bottom", "displayMode": "list"}}
+      "options": {
+        "legend": {
+          "placement": "bottom",
+          "displayMode": "list"
+        }
+      }
     },
     {
       "type": "timeseries",
       "title": "End-to-end lag p99 (seconds)",
       "description": "now - x-produced-at, p99. Target < 1.5s (resume bullet).",
       "id": 2,
-      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.99, sum by (le, channel) (rate(nexus_event_e2e_lag_seconds_bucket[1m])))",
@@ -41,11 +64,21 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "green", "value": null},
-              {"color": "red", "value": 1.5}
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1.5
+              }
             ]
           },
-          "custom": {"thresholdsStyle": {"mode": "line"}}
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
         }
       }
     },
@@ -53,8 +86,16 @@
       "type": "timeseries",
       "title": "DLQ backlog by lane",
       "id": 3,
-      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "nexus_dlq_messages_total",
@@ -65,11 +106,19 @@
     },
     {
       "type": "timeseries",
-      "title": "Cache hit rate — scope=by_id",
+      "title": "Cache hit rate \u2014 scope=by_id",
       "description": "Resume-bullet metric: 95% target.",
       "id": 4,
-      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "expr": "sum(rate(nexus_cache_hits_total{scope=\"by_id\"}[1m])) / (sum(rate(nexus_cache_hits_total{scope=\"by_id\"}[1m])) + sum(rate(nexus_cache_misses_total{scope=\"by_id\"}[1m])))",
@@ -85,26 +134,59 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "red", "value": null},
-              {"color": "yellow", "value": 0.8},
-              {"color": "green", "value": 0.95}
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.8
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
             ]
           },
-          "custom": {"thresholdsStyle": {"mode": "line"}}
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
         }
       }
     },
     {
       "type": "timeseries",
       "title": "Three-stage latency p99 (ms)",
-      "description": "ingest / processing / delivery — the trace bullet.",
+      "description": "ingest / processing / delivery \u2014 the trace bullet.",
       "id": 5,
-      "gridPos": {"x": 0, "y": 16, "w": 24, "h": 8},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(nexus_stage_ingest_duration_seconds_bucket[1m])))", "legendFormat": "ingest p99", "refId": "A"},
-        {"expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(nexus_stage_processing_duration_seconds_bucket[1m])))", "legendFormat": "processing p99", "refId": "B"},
-        {"expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(nexus_stage_delivery_duration_seconds_bucket[1m])))", "legendFormat": "delivery p99", "refId": "C"}
+        {
+          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(nexus_stage_ingest_duration_seconds_bucket[1m])))",
+          "legendFormat": "ingest p99",
+          "refId": "A"
+        },
+        {
+          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(nexus_stage_processing_duration_seconds_bucket[1m])))",
+          "legendFormat": "processing p99",
+          "refId": "B"
+        },
+        {
+          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(nexus_stage_delivery_duration_seconds_bucket[1m])))",
+          "legendFormat": "delivery p99",
+          "refId": "C"
+        }
       ],
       "fieldConfig": {
         "defaults": {
@@ -112,11 +194,21 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "green", "value": null},
-              {"color": "red", "value": 50}
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
             ]
           },
-          "custom": {"thresholdsStyle": {"mode": "line"}}
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
         }
       }
     },
@@ -124,52 +216,145 @@
       "type": "stat",
       "title": "Publish rate (msg/s)",
       "id": 6,
-      "gridPos": {"x": 0, "y": 24, "w": 6, "h": 5},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum(rate(nexus_events_published_total[1m]))", "refId": "A"}
+        {
+          "expr": "sum(rate(nexus_events_published_total[1m]))",
+          "refId": "A"
+        }
       ]
     },
     {
       "type": "stat",
       "title": "Processed rate (msg/s)",
       "id": 7,
-      "gridPos": {"x": 6, "y": 24, "w": 6, "h": 5},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 6,
+        "y": 24,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum(rate(nexus_messages_processed_total{status=\"delivered\"}[1m]))", "refId": "A"}
+        {
+          "expr": "sum(rate(nexus_messages_processed_total{status=\"delivered\"}[1m]))",
+          "refId": "A"
+        }
       ]
     },
     {
       "type": "stat",
       "title": "Delivery success rate",
       "id": 8,
-      "gridPos": {"x": 12, "y": 24, "w": 6, "h": 5},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum(rate(nexus_messages_processed_total{status=\"delivered\"}[5m])) / sum(rate(nexus_messages_processed_total[5m]))", "refId": "A"}
+        {
+          "expr": "sum(rate(nexus_messages_processed_total{status=\"delivered\"}[5m])) / sum(rate(nexus_messages_processed_total[5m]))",
+          "refId": "A"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
     },
     {
       "type": "stat",
       "title": "Total DLQ records",
       "id": 9,
-      "gridPos": {"x": 18, "y": 24, "w": 6, "h": 5},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "x": 18,
+        "y": 24,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum(nexus_dlq_messages_total)", "refId": "A"}
+        {
+          "expr": "sum(nexus_dlq_messages_total)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Processed rate by channel and status (rec/s)",
+      "description": "Per-lane throughput split by outcome. Absorbs the 'Delivery Rate by Channel' and 'Duplicate Skip Rate' panels from the retired pre-Kafka dashboard. A rising duplicate rate means records are being redelivered (rebalance or an uncommitted crash); a rising failed/dlq rate means a downstream is rejecting.",
+      "id": 10,
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (channel, status) (rate(nexus_messages_processed_total[1m]))",
+          "legendFormat": "{{channel}} / {{status}}",
+          "refId": "A"
+        }
       ]
     }
   ],
   "refresh": "5s",
   "schemaVersion": 39,
-  "tags": ["nexus", "kafka", "redpanda"],
-  "templating": {"list": []},
-  "time": {"from": "now-15m", "to": "now"},
+  "tags": [
+    "nexus",
+    "kafka",
+    "redpanda"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "",
-  "title": "Nexus — Kafka pipeline",
+  "title": "Nexus \u2014 Kafka pipeline",
   "uid": "nexus-kafka",
   "version": 1,
   "weekStart": ""

@@ -122,11 +122,11 @@ services:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/nexus.json
+      # Land on the pipeline board, not whatever Grafana picks first.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/dashboards/nexus-kafka.json
     volumes:
       - ./grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
       - ./grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/provider.yml:ro
-      - ./grafana/dashboard.json:/etc/grafana/provisioning/dashboards/nexus.json:ro
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards/dashboards:ro
       - grafana_data:/var/lib/grafana
     depends_on:

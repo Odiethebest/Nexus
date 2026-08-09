@@ -62,9 +62,17 @@ export interface MetricsSummary {
   processing_latency_p99_ms: number
   /** p99 of (now − x-produced-at) at pick-up. The "lag < 1.5s" SLO metric. */
   e2e_lag_p99_seconds:       number
+  /** Offset lag per lane, keyed `<channel>_<priority>`. Real pending work. */
   queue_depth:               Record<string, number>
   delivery_success_rate:     number
+  /** Sum of dlq_depth. */
   dlq_count:                 number
+  /**
+   * Dead-letter count per lane, keyed `<channel>_<priority>`. Sampled from
+   * DLQ topic end offsets, so these are cumulative totals of everything ever
+   * dead-lettered — not a pending backlog. Replay does not lower them.
+   */
+  dlq_depth:                 Record<string, number>
   active_ws_connections:     number
   uptime_seconds:            number
 }

@@ -1,63 +1,72 @@
 # Nexus Repository Structure
 
-> Last updated: 2026-04-06
-
 ## Top-Level Layout
 
 ```text
 nexus/
-├── cmd/                  # executable entry points (producer / worker)
+├── cmd/                  # executable entry points
 ├── deploy/               # Docker, Prometheus, Grafana, Railway configs
-├── docs/                 # project documentation
+├── docs/                 # this directory
 ├── internal/             # backend application code
-├── proto/                # gRPC protocol definitions
+├── proto/                # gRPC protocol definition
 ├── scripts/              # operational / manual test scripts
 ├── web/                  # Next.js frontend
 ├── .env.example          # environment variable template
+├── CLAUDE.md             # project specification / collaboration reference
+├── MIGRATION.md          # RabbitMQ -> Redpanda transition record
 ├── README.md             # project overview
-└── structure.md          # this file
+└── RUNBOOK.md            # claim -> code -> metric -> reproduction mapping
 ```
 
 ## `cmd/`
 
 ```text
 cmd/
-├── producer/
-│   └── main.go           # HTTP + gRPC + WebSocket + load-test API service
-└── worker/
-    └── main.go           # queue consumers + metrics endpoint (:9091 by default)
+├── producer/             # HTTP + gRPC + WebSocket + loadtest API service
+├── worker/               # nine lane consumers + metrics endpoint (:9091)
+└── loadgen/              # in-repo Go load generator (write + read streams)
 ```
 
 ## `internal/`
 
 ```text
 internal/
-├── broker/               # RabbitMQ connection, routing, publisher
-├── envutil/              # .env discovery and loading utilities
-├── grpcserver/           # gRPC server implementation
-├── hub/                  # WebSocket hub
-├── idempotency/          # Redis deduplication
-├── integration/          # end-to-end integration tests (build tag: integration)
-├── loadtest/             # load-test client and orchestration (real/demo modes)
+├── envutil/              # .env discovery and loading
+├── grpcserver/           # gRPC EventService (hand-written JSON codec)
+├── hub/                  # WebSocket hub + origin-checked upgrader
+├── idempotency/          # Redis SETNX claims, scoped per channel
+├── integration/          # end-to-end tests (build tag: integration)
+├── kbroker/              # Redpanda/Kafka: config, topics, publisher,
+│                         #   admin (EnsureTopics), consumer-lag sampler
+├── kworker/              # lane runner, channel processors, republisher
+├── loadtest/             # k6 Cloud orchestration (real) + synthetic (demo)
 ├── mailer/               # SMTP abstraction
-├── metrics/              # Prometheus metrics and summary computation
-├── replay/               # dead-letter replay logic
-├── store/                # PostgreSQL data access layer
-└── worker/               # email / inapp / webhook workers
+├── metrics/              # Prometheus metric definitions + summary endpoint
+├── notifcache/           # cache-aside read path (by_id + list scopes)
+├── replay/               # DLQ -> primary topic replay
+└── store/                # PostgreSQL data access layer
 ```
+
+There is no `internal/broker` or `internal/worker`; those were the RabbitMQ
+implementations and were removed. `kbroker` and `kworker` replace them.
 
 ## `web/`
 
 ```text
 web/
-├── app/                  # App Router pages
-├── components/           # feature components + shadcn UI primitives
-├── hooks/                # client-side data and connection hooks
-├── lib/                  # frontend API client and shared utilities
+├── app/                  # App Router pages: dashboard, live, notifications,
+│                         #   loadtest, dlq, publish
+├── components/
+│   ├── ui/               # shadcn/ui primitives — never edit by hand
+│   ├── live/             # EventCard
+│   ├── notifications/    # FilterBar
+│   └── *.tsx             # sidebar, header, metric cards, chart, data table
+├── hooks/                # useMetrics, useNotifications, useWebSocket,
+│                         #   useLoadTest, use-mobile
+├── lib/                  # api.ts (all backend calls) + utils
 ├── public/               # static assets
-├── types/                # TypeScript domain types
-├── package.json
-└── README.md
+├── types/                # shared TypeScript domain types
+└── package.json
 ```
 
 ## `deploy/`
@@ -68,10 +77,12 @@ deploy/
 ├── Dockerfile.producer
 ├── Dockerfile.worker
 ├── Dockerfile.web
-├── prometheus.yml
+├── prometheus.yml        # scrapes producer, worker, and Redpanda
 ├── grafana/
-│   ├── dashboard.json
-│   └── datasource.yml
+│   ├── datasource.yml
+│   ├── dashboards.yml    # provider config
+│   └── dashboards/
+│       └── nexus-kafka.json   # the dashboard, also the default home page
 ├── railway.toml          # producer service profile
 ├── railway.worker.toml   # worker service profile
 └── railway.web.toml      # web service profile
@@ -79,5 +90,8 @@ deploy/
 
 ## Notes
 
-- `CLAUDE.md` remains as the project specification and collaboration reference.
-- Both root `railway.toml` and `deploy/railway.toml` exist; the `deploy/` profiles are the preferred source of truth.
+- `CLAUDE.md` is the project specification and collaboration reference; keep
+  it in sync when changing an API, page, or environment variable.
+- Both a root `railway.toml` and `deploy/railway.toml` exist; the `deploy/`
+  profiles are the preferred source of truth.
+- Root `nixpacks.toml` builds the producer only and is not used by Railway.
