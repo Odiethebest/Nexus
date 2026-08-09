@@ -71,6 +71,54 @@ func TestCheck_IndependentIDs_EachAllowedOnce(t *testing.T) {
 	}
 }
 
+func TestRelease_AllowsTheNextAttemptThrough(t *testing.T) {
+	c := newClient(t)
+	ctx := context.Background()
+
+	if ok, _ := c.CheckScoped(ctx, "webhook", "msg-rel"); !ok {
+		t.Fatal("expected first claim to be granted")
+	}
+	if ok, _ := c.CheckScoped(ctx, "webhook", "msg-rel"); ok {
+		t.Fatal("expected second claim to be refused while the first is held")
+	}
+
+	if err := c.Release(ctx, "webhook", "msg-rel"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	ok, err := c.CheckScoped(ctx, "webhook", "msg-rel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Error("expected the claim to be grantable again after Release")
+	}
+}
+
+func TestRelease_IsScopedAndSafeWhenAbsent(t *testing.T) {
+	c := newClient(t)
+	ctx := context.Background()
+
+	// Releasing a claim that was never taken is a no-op, not an error.
+	if err := c.Release(ctx, "webhook", "never-seen"); err != nil {
+		t.Fatalf("release of absent key: %v", err)
+	}
+	if err := c.Release(ctx, "webhook", ""); err != nil {
+		t.Fatalf("release of empty id: %v", err)
+	}
+
+	// A release in one channel must not free the same id in another —
+	// fan-out means all three channels hold independent claims.
+	c.CheckScoped(ctx, "email", "msg-fanout")
+	c.CheckScoped(ctx, "inapp", "msg-fanout")
+	if err := c.Release(ctx, "email", "msg-fanout"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if ok, _ := c.CheckScoped(ctx, "inapp", "msg-fanout"); ok {
+		t.Error("releasing the email claim must not free the inapp claim")
+	}
+}
+
 func TestCheck_TTLExpiry_AllowsRedelivery(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
