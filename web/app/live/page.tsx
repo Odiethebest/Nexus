@@ -19,14 +19,12 @@ const CHANNEL_OPTS: ChannelFilter[] = ["all", "email", "inapp", "webhook"]
 const PRIORITY_OPTS: PriorityFilter[] = ["all", "high", "normal", "low"]
 
 export default function LivePage() {
-  const { events, connected, clear } = useWebSocket()
+  const { events, connected, loading, clear } = useWebSocket()
   const [channelFilter, setChannelFilter]   = useState<ChannelFilter>("all")
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all")
-  const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
     document.title = "Live Feed — Nexus"
-    setMounted(true)
   }, [])
 
   const filtered = (events ?? [])
@@ -92,7 +90,7 @@ export default function LivePage() {
           </div>
 
           {/* Event feed */}
-          {!mounted ? (
+          {loading ? (
             <div className="flex flex-col gap-2">
               {[0, 1, 2].map(i => <Skeleton key={i} className="h-24 w-full rounded-lg" />)}
             </div>

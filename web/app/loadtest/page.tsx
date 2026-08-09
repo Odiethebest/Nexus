@@ -27,16 +27,34 @@ import { Button } from "@/components/ui/button"
 import { useLoadTest } from "@/hooks/useLoadTest"
 import { useMetrics } from "@/hooks/useMetrics"
 
+/**
+ * Splitting the timer in two means the counter never needs resetting: when
+ * the run stops, RunningTimer unmounts and takes its state with it, and the
+ * next run mounts a fresh one at zero. The previous single-component version
+ * reset by calling setState directly in an effect body, which triggers a
+ * cascading render.
+ */
 function ElapsedTimer({ running }: { running: boolean }) {
+  if (!running) return null
+  return <RunningTimer />
+}
+
+function RunningTimer() {
   const [elapsed, setElapsed] = useState(0)
 
   useEffect(() => {
-    if (!running) { setElapsed(0); return }
-    const id = setInterval(() => setElapsed(s => s + 1), 1000)
+    // Derive from a start timestamp rather than incrementing. A counter
+    // drifts, and stalls entirely when the tab is backgrounded and the
+    // browser throttles setInterval — the displayed time would then
+    // under-report the real run length.
+    const startedAt = Date.now()
+    const id = setInterval(
+      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    )
     return () => clearInterval(id)
-  }, [running])
+  }, [])
 
-  if (!running) return null
   return <span className="text-sm text-muted-foreground">{elapsed}s elapsed</span>
 }
 
