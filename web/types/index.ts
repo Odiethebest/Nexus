@@ -25,11 +25,23 @@ export interface Notification {
   created_at: string
 }
 
+/**
+ * Mirrors wsfeed.Envelope (internal/wsfeed/wsfeed.go), the payload delivered
+ * over `GET /ws`. Field names differ from Notification on purpose: `type`
+ * not `event_type`, `timestamp` not `created_at`.
+ *
+ * The worker emits one envelope per (message_id, channel) verdict, so a
+ * single published event produces three — one per channel — exactly like the
+ * notifications table. `channel` and `status` are always present and real;
+ * the client used to hardcode `channel: 'inapp'`, which made the /live
+ * channel filter inert.
+ */
 export interface WsEvent {
   message_id: string
   type:       string      // NOT event_type
   priority:   Priority
-  channel?:   Channel     // optional — live WS events are always 'inapp'
+  channel:    Channel
+  status:     Status
   payload:    Record<string, unknown>
   timestamp:  string      // NOT created_at
 }

@@ -21,6 +21,7 @@ import (
 	"nexus/internal/kbroker"
 	"nexus/internal/metrics"
 	"nexus/internal/store"
+	"nexus/internal/wsfeed"
 )
 
 // Outcome describes what the Processor decided to do with an event.
@@ -68,6 +69,17 @@ type recordCommitter interface {
 	CommitRecords(ctx context.Context, rs ...*kgo.Record) error
 }
 
+// LiveFeed receives one envelope per record the runner reaches a verdict on,
+// for the dashboard's /ws stream. Publishing happens here rather than inside
+// a Processor so every channel appears in the feed, not just in-app — the UI
+// filters by channel and needs all three.
+//
+// Implementations must not block: this sits on the delivery path. Optional;
+// a nil LiveFeed disables the feed.
+type LiveFeed interface {
+	Publish(ctx context.Context, env wsfeed.Envelope)
+}
+
 // Runner drives a single (channel, priority) lane end-to-end.
 type Runner struct {
 	Channel     kbroker.Channel
@@ -77,6 +89,7 @@ type Runner struct {
 	Idempotency *idempotency.Client
 	Store       NotificationStore
 	Republisher Republisher
+	Feed        LiveFeed
 	Log         *slog.Logger
 
 	client    *kgo.Client
@@ -127,6 +140,7 @@ func NewRunner(cfg kbroker.Config, opts RunnerOptions) (*Runner, error) {
 		Idempotency: opts.Idempotency,
 		Store:       opts.Store,
 		Republisher: opts.Republisher,
+		Feed:        opts.Feed,
 		Log:         log.With("channel", string(opts.Channel), "priority", string(opts.Priority)),
 		client:      client,
 		committer:   client,
@@ -143,6 +157,7 @@ type RunnerOptions struct {
 	Idempotency *idempotency.Client
 	Store       NotificationStore
 	Republisher Republisher
+	Feed        LiveFeed
 	Log         *slog.Logger
 }
 
@@ -276,12 +291,12 @@ func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 	switch outcome {
 	case OutcomeDelivered:
 		metrics.MessagesProcessed.WithLabelValues(channelLabel, "delivered").Inc()
-		r.persist(ctx, event, rec.Value, "delivered")
+		r.recordOutcome(ctx, event, rec.Value, "delivered")
 		r.commit(ctx, rec)
 
 	case OutcomeSkipped:
 		metrics.MessagesProcessed.WithLabelValues(channelLabel, "no_webhook").Inc()
-		r.persist(ctx, event, rec.Value, "skipped")
+		r.recordOutcome(ctx, event, rec.Value, "skipped")
 		r.commit(ctx, rec)
 
 	case OutcomeTransientError:
@@ -290,7 +305,7 @@ func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 				"msg_id", msgID, "attempts", retryCount+1)
 			r.sendToDLQ(ctx, rec)
 			metrics.MessagesProcessed.WithLabelValues(channelLabel, "dlq").Inc()
-			r.persist(ctx, event, rec.Value, "dlq")
+			r.recordOutcome(ctx, event, rec.Value, "dlq")
 			r.commit(ctx, rec)
 			return
 		}
@@ -299,7 +314,7 @@ func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 		// (message_id, channel), so a later success or DLQ overwrites this
 		// — but until then the message is visible in history instead of
 		// disappearing between attempts.
-		r.persist(ctx, event, rec.Value, "failed")
+		r.recordOutcome(ctx, event, rec.Value, "failed")
 
 		// Release the idempotency claim before re-producing. The claim
 		// covers one attempt; the retry carries the same message_id into
@@ -329,7 +344,7 @@ func (r *Runner) handle(ctx context.Context, rec *kgo.Record) {
 	case OutcomePermanentError:
 		r.sendToDLQ(ctx, rec)
 		metrics.MessagesProcessed.WithLabelValues(channelLabel, "dlq").Inc()
-		r.persist(ctx, event, rec.Value, "dlq")
+		r.recordOutcome(ctx, event, rec.Value, "dlq")
 		r.commit(ctx, rec)
 	}
 }
@@ -364,7 +379,10 @@ func (r *Runner) commit(ctx context.Context, rec *kgo.Record) {
 	}
 }
 
-func (r *Runner) persist(ctx context.Context, event kbroker.Event, body []byte, status string) {
+// recordOutcome writes the verdict to both durable history (PostgreSQL) and
+// the live dashboard feed. The two always move together — every state a row
+// takes is a state the operator watching /live should see.
+func (r *Runner) recordOutcome(ctx context.Context, event kbroker.Event, body []byte, status string) {
 	err := r.Store.SaveNotification(ctx, store.Notification{
 		MessageID: event.MessageID,
 		Channel:   string(r.Channel),
@@ -376,6 +394,18 @@ func (r *Runner) persist(ctx context.Context, event kbroker.Event, body []byte, 
 		r.Log.Error("persist notification", "msg_id", event.MessageID, "err", err)
 	}
 
+	if r.Feed == nil {
+		return
+	}
+	r.Feed.Publish(ctx, wsfeed.Envelope{
+		MessageID: event.MessageID,
+		Type:      event.Type,
+		Priority:  event.Priority,
+		Channel:   string(r.Channel),
+		Status:    status,
+		Payload:   event.Payload,
+		Timestamp: event.Timestamp,
+	})
 }
 
 // PoolSizesFor returns [pool, pool/2, pool/4] mirroring the AMQP QoS

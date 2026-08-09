@@ -16,6 +16,7 @@ import (
 	"nexus/internal/idempotency"
 	"nexus/internal/kbroker"
 	"nexus/internal/store"
+	"nexus/internal/wsfeed"
 )
 
 // The idempotency claim and the retry loop both key off message_id, so
@@ -80,7 +81,13 @@ func (f *fakeCommitter) CommitRecords(context.Context, ...*kgo.Record) error {
 	return nil
 }
 
-func newTestRunner(t *testing.T, proc Processor) (*Runner, *fakeRepublisher, *fakeStore, *fakeCommitter) {
+type fakeFeed struct{ sent []wsfeed.Envelope }
+
+func (f *fakeFeed) Publish(_ context.Context, env wsfeed.Envelope) {
+	f.sent = append(f.sent, env)
+}
+
+func newTestRunner(t *testing.T, proc Processor) (*Runner, *fakeRepublisher, *fakeStore, *fakeCommitter, *fakeFeed) {
 	t.Helper()
 
 	mr := miniredis.RunT(t)
@@ -90,6 +97,7 @@ func newTestRunner(t *testing.T, proc Processor) (*Runner, *fakeRepublisher, *fa
 	repub := &fakeRepublisher{}
 	st := &fakeStore{}
 	com := &fakeCommitter{}
+	feed := &fakeFeed{}
 
 	return &Runner{
 		Channel:     kbroker.ChannelWebhook,
@@ -99,10 +107,11 @@ func newTestRunner(t *testing.T, proc Processor) (*Runner, *fakeRepublisher, *fa
 		Idempotency: idempotency.New(rdb),
 		Store:       st,
 		Republisher: repub,
+		Feed:        feed,
 		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		committer:   com,
 		backoff:     func(int) time.Duration { return 0 },
-	}, repub, st, com
+	}, repub, st, com, feed
 }
 
 func testRecord(t *testing.T, msgID string, retryCount int) *kgo.Record {
@@ -136,7 +145,7 @@ func testRecord(t *testing.T, msgID string, retryCount int) *kgo.Record {
 // duplicate without ever being delivered.
 func TestHandleRetryIsDeliveredNotSwallowedAsDuplicate(t *testing.T) {
 	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeTransientError, OutcomeDelivered}}
-	r, repub, st, _ := newTestRunner(t, proc)
+	r, repub, st, _, _ := newTestRunner(t, proc)
 	ctx := context.Background()
 
 	r.handle(ctx, testRecord(t, "msg-retry", 0))
@@ -162,7 +171,7 @@ func TestHandleRetryIsDeliveredNotSwallowedAsDuplicate(t *testing.T) {
 // to actually reach the processor.
 func TestHandleExhaustsRetryBudgetThenDLQ(t *testing.T) {
 	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeTransientError}}
-	r, repub, st, _ := newTestRunner(t, proc)
+	r, repub, st, _, _ := newTestRunner(t, proc)
 	ctx := context.Background()
 
 	rec := testRecord(t, "msg-dlq", 0)
@@ -201,7 +210,7 @@ func TestHandleExhaustsRetryBudgetThenDLQ(t *testing.T) {
 // redelivery — same record, same offset, no retry in between.
 func TestHandleDedupesRedeliveryOfSameRecord(t *testing.T) {
 	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeDelivered}}
-	r, _, st, com := newTestRunner(t, proc)
+	r, _, st, com, _ := newTestRunner(t, proc)
 	ctx := context.Background()
 
 	rec := testRecord(t, "msg-dupe", 0)
@@ -222,7 +231,7 @@ func TestHandleDedupesRedeliveryOfSameRecord(t *testing.T) {
 // A permanent verdict skips the retry loop entirely and keeps its claim.
 func TestHandlePermanentErrorGoesStraightToDLQ(t *testing.T) {
 	proc := &scriptedProcessor{outcomes: []Outcome{OutcomePermanentError}}
-	r, repub, st, _ := newTestRunner(t, proc)
+	r, repub, st, _, _ := newTestRunner(t, proc)
 
 	r.handle(context.Background(), testRecord(t, "msg-perm", 0))
 
@@ -234,6 +243,66 @@ func TestHandlePermanentErrorGoesStraightToDLQ(t *testing.T) {
 	}
 	if got := st.statuses(); len(got) != 1 || got[0] != "dlq" {
 		t.Errorf("persisted statuses = %v, want [dlq]", got)
+	}
+}
+
+// The /live feed is driven from the runner, not from InAppProcessor, so the
+// envelope must carry this lane's real channel — the UI filters on it and
+// used to receive a hardcoded "inapp" for every event.
+func TestHandlePublishesFeedEnvelopePerOutcome(t *testing.T) {
+	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeTransientError, OutcomeDelivered}}
+	r, repub, _, _, feed := newTestRunner(t, proc)
+	ctx := context.Background()
+
+	r.handle(ctx, testRecord(t, "msg-feed", 0))
+	r.handle(ctx, repub.retries[0])
+
+	if len(feed.sent) != 2 {
+		t.Fatalf("published %d envelopes, want 2 (failed then delivered)", len(feed.sent))
+	}
+	for i, env := range feed.sent {
+		if env.Channel != string(kbroker.ChannelWebhook) {
+			t.Errorf("envelope %d: channel = %q, want webhook (the runner's lane)", i, env.Channel)
+		}
+		if env.MessageID != "msg-feed" {
+			t.Errorf("envelope %d: message_id = %q", i, env.MessageID)
+		}
+		if env.Priority != string(kbroker.PriorityNormal) {
+			t.Errorf("envelope %d: priority = %q, want normal", i, env.Priority)
+		}
+	}
+	if feed.sent[0].Status != "failed" || feed.sent[1].Status != "delivered" {
+		t.Errorf("statuses = %q/%q, want failed/delivered",
+			feed.sent[0].Status, feed.sent[1].Status)
+	}
+}
+
+// A duplicate writes no row, so it must not reach the feed either —
+// otherwise the UI shows phantom deliveries during a rebalance.
+func TestHandleDoesNotPublishFeedForDuplicate(t *testing.T) {
+	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeDelivered}}
+	r, _, _, _, feed := newTestRunner(t, proc)
+	ctx := context.Background()
+
+	rec := testRecord(t, "msg-dupe-feed", 0)
+	r.handle(ctx, rec)
+	r.handle(ctx, rec)
+
+	if len(feed.sent) != 1 {
+		t.Errorf("published %d envelopes, want 1 — the duplicate must be silent", len(feed.sent))
+	}
+}
+
+// A nil Feed disables the live stream without breaking delivery.
+func TestHandleToleratesNilFeed(t *testing.T) {
+	proc := &scriptedProcessor{outcomes: []Outcome{OutcomeDelivered}}
+	r, _, st, _, _ := newTestRunner(t, proc)
+	r.Feed = nil
+
+	r.handle(context.Background(), testRecord(t, "msg-nofeed", 0))
+
+	if got := st.statuses(); len(got) != 1 || got[0] != "delivered" {
+		t.Errorf("persisted statuses = %v, want [delivered]", got)
 	}
 }
 

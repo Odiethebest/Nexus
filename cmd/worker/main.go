@@ -15,13 +15,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"nexus/internal/envutil"
-	"nexus/internal/hub"
 	"nexus/internal/idempotency"
 	"nexus/internal/kbroker"
 	"nexus/internal/kworker"
 	"nexus/internal/mailer"
 	_ "nexus/internal/metrics" // register Prometheus collectors
 	"nexus/internal/store"
+	"nexus/internal/wsfeed"
 )
 
 func main() {
@@ -78,7 +78,11 @@ func main() {
 		slog.Warn("mailer: SMTP_HOST not set, email sending disabled")
 	}
 
-	wsHub := hub.New()
+	// Live dashboard feed. The worker has no HTTP server, so it cannot push
+	// to WebSocket clients itself — it publishes envelopes onto Redis and
+	// every producer replica fans them out to its own /ws clients.
+	feed := wsfeed.NewPublisher(rdb, slog.Default())
+	defer feed.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -119,7 +123,7 @@ func main() {
 	// backlog can't slow the high priority path.
 	procs := map[kbroker.Channel]kworker.Processor{
 		kbroker.ChannelEmail:   &kworker.EmailProcessor{Mailer: m, Log: slog.Default()},
-		kbroker.ChannelInApp:   &kworker.InAppProcessor{Hub: wsHub, Log: slog.Default()},
+		kbroker.ChannelInApp:   &kworker.InAppProcessor{Log: slog.Default()},
 		kbroker.ChannelWebhook: kworker.NewWebhookProcessor(slog.Default()),
 	}
 	pools := map[kbroker.Channel]map[kbroker.Priority]int{
@@ -137,6 +141,7 @@ func main() {
 				Idempotency: idem,
 				Store:       st,
 				Republisher: republisher,
+				Feed:        feed,
 				Log:         slog.Default(),
 			})
 			if err != nil {

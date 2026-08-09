@@ -29,6 +29,7 @@ import (
 	"nexus/internal/notifcache"
 	"nexus/internal/replay"
 	"nexus/internal/store"
+	"nexus/internal/wsfeed"
 )
 
 // eventPublisher is the local narrowing of what handlers need from a
@@ -98,9 +99,20 @@ func main() {
 	// readable from any page even with the REST API locked down.
 	wsHub := hub.New(originChecker(allowedOrigins))
 
-	// Root context so background samplers (lag reader) stop when SIGTERM fires.
+	// Root context so background samplers (lag reader, ws bridge) stop when
+	// SIGTERM fires.
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	defer rootCancel()
+
+	// Delivery events originate in the worker process, which has no HTTP
+	// server. This bridge subscribes to the Redis channel the worker
+	// publishes on and fans each envelope out to this replica's /ws clients.
+	go func() {
+		if err := wsfeed.NewBridge(rdb, wsHub, slog.Default()).Run(rootCtx); err != nil &&
+			!errors.Is(err, context.Canceled) {
+			slog.Error("ws feed bridge stopped", "err", err)
+		}
+	}()
 
 	// Best-effort auto-create topics. Failures are logged but not fatal —
 	// operators may pre-create topics on managed clusters where the app
