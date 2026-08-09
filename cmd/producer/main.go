@@ -87,12 +87,16 @@ func main() {
 	defer rdb.Close()
 	notifCache := notifcache.New(rdb, st)
 
-	allowedOrigins := parseAllowedOrigins(os.Getenv("LOADTEST_ALLOWED_ORIGINS"))
-	slog.Info("trusted request origins configured", "count", len(allowedOrigins))
-	// WebSocket accepts all origins — browser clients connect from localhost:3000 in dev
-	// and from arbitrary origins in production (behind TLS). CORS for HTTP routes is
-	// handled separately by corsMiddleware.
-	wsHub := hub.New()
+	allowedOrigins := loadAllowedOrigins()
+	if _, allowAll := allowedOrigins[corsAllowAllMarker]; allowAll {
+		slog.Warn("CORS: every origin is trusted — set CORS_ALLOWED_ORIGINS to restrict")
+	} else {
+		slog.Info("CORS: origin allow-list active", "count", len(allowedOrigins))
+	}
+	// Browsers do not apply CORS to WebSocket handshakes, so the upgrader
+	// gets the same allow-list explicitly — otherwise /ws would stay
+	// readable from any page even with the REST API locked down.
+	wsHub := hub.New(originChecker(allowedOrigins))
 
 	// Root context so background samplers (lag reader) stop when SIGTERM fires.
 	rootCtx, rootCancel := context.WithCancel(context.Background())
@@ -142,31 +146,19 @@ func main() {
 	var latestLoadtestRun atomic.Int64
 
 	// ── HTTP server ───────────────────────────────────────────────────────
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /events", handlePublish(pub))
-	mux.HandleFunc("GET /notifications/{message_id}", handleGetNotification(notifCache))
-	mux.HandleFunc("GET /notifications", handleListNotifications(notifCache))
-	mux.HandleFunc("POST /notifications/clear", handleClearNotifications(st))
-	mux.HandleFunc("POST /dlq/replay", handleReplay(replayer))
-	mux.HandleFunc("POST /ops/loadtest/start", handleLoadtestStart(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
-	mux.HandleFunc("GET /ops/loadtest/{run_id}", handleLoadtestStatus(loadtestSvc, demoLoadtestSvc))
-	mux.HandleFunc("GET /ops/loadtest/latest", handleLoadtestLatest(loadtestSvc, demoLoadtestSvc, &latestLoadtestRun))
-	mux.HandleFunc("GET /ws", wsHub.ServeWS)
-	mux.HandleFunc("GET /api/metrics/summary", handleMetricsSummary(wsHub))
-	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("nexus producer"))
-	})
-
 	srv := &http.Server{
-		Addr:         listenAddr,
-		Handler:      corsMiddleware(mux),
+		Addr: listenAddr,
+		Handler: newRouter(routerDeps{
+			Publisher:      pub,
+			Cache:          notifCache,
+			Store:          st,
+			Replayer:       replayer,
+			Hub:            wsHub,
+			Loadtest:       loadtestSvc,
+			DemoLoadtest:   demoLoadtestSvc,
+			LatestRun:      &latestLoadtestRun,
+			AllowedOrigins: allowedOrigins,
+		}),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -212,6 +204,54 @@ func main() {
 		lagReader.Close()
 	}
 	slog.Info("producer shut down")
+}
+
+// ── Routing ───────────────────────────────────────────────────────────────────
+
+// routerDeps is everything the HTTP surface needs. Grouped into a struct so
+// newRouter can be exercised in tests without standing up Kafka, PostgreSQL
+// and Redis first.
+type routerDeps struct {
+	Publisher      eventPublisher
+	Cache          *notifcache.Cache
+	Store          *store.Store
+	Replayer       *replay.Replayer
+	Hub            *hub.Hub
+	Loadtest       *loadtest.Service
+	DemoLoadtest   *loadtest.DemoService
+	LatestRun      *atomic.Int64
+	AllowedOrigins map[string]struct{}
+}
+
+// newRouter registers every route and returns it already wrapped in the
+// origin policy. The wrap lives here, not at the call site, because the
+// previous arrangement — build an allow-list in main, then wrap with an
+// unrelated allow-all middleware — is exactly how the policy came to be
+// silently bypassed.
+func newRouter(d routerDeps) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /events", handlePublish(d.Publisher))
+	mux.HandleFunc("GET /notifications/{message_id}", handleGetNotification(d.Cache))
+	mux.HandleFunc("GET /notifications", handleListNotifications(d.Cache))
+	mux.HandleFunc("POST /notifications/clear", handleClearNotifications(d.Store))
+	mux.HandleFunc("POST /dlq/replay", handleReplay(d.Replayer))
+	mux.HandleFunc("POST /ops/loadtest/start", handleLoadtestStart(d.Loadtest, d.DemoLoadtest, d.LatestRun))
+	mux.HandleFunc("GET /ops/loadtest/{run_id}", handleLoadtestStatus(d.Loadtest, d.DemoLoadtest))
+	mux.HandleFunc("GET /ops/loadtest/latest", handleLoadtestLatest(d.Loadtest, d.DemoLoadtest, d.LatestRun))
+	mux.HandleFunc("GET /ws", d.Hub.ServeWS)
+	mux.HandleFunc("GET /api/metrics/summary", handleMetricsSummary(d.Hub))
+	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("nexus producer"))
+	})
+
+	return withCORS(mux, d.AllowedOrigins)
 }
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
@@ -725,17 +765,28 @@ func initLoadtestService() (*loadtest.Service, error) {
 	return loadtest.NewService(serviceCfg, client, guard), nil
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// loadAllowedOrigins reads the CORS allow-list. CORS_ALLOWED_ORIGINS is the
+// current name; LOADTEST_ALLOWED_ORIGINS is still honored because it came
+// first, back when the list was only ever intended for the /ops/loadtest
+// routes. It now governs every route, so the name is worth migrating off.
+func loadAllowedOrigins() map[string]struct{} {
+	if raw := strings.TrimSpace(os.Getenv("CORS_ALLOWED_ORIGINS")); raw != "" {
+		return parseAllowedOrigins(raw)
+	}
+	if raw := strings.TrimSpace(os.Getenv("LOADTEST_ALLOWED_ORIGINS")); raw != "" {
+		slog.Warn("LOADTEST_ALLOWED_ORIGINS is deprecated — rename to CORS_ALLOWED_ORIGINS; " +
+			"it now applies to every route, not just /ops/loadtest")
+		return parseAllowedOrigins(raw)
+	}
+	return parseAllowedOrigins("")
+}
+
+// originChecker adapts the HTTP allow-list to gorilla's WebSocket upgrader
+// so both transports enforce one policy.
+func originChecker(allowedOrigins map[string]struct{}) func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		return isRequestOriginAllowed(r, allowedOrigins)
+	}
 }
 
 func withCORS(next http.Handler, allowedOrigins map[string]struct{}) http.Handler {
