@@ -26,15 +26,6 @@ var (
 		[]string{"channel", "status"},
 	)
 
-	// PublishDuration measures end-to-end publish latency including broker ack.
-	// Deprecated: kept for the legacy AMQP path. Kafka path uses
-	// StageIngestDuration.
-	PublishDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "nexus_publish_duration_seconds",
-		Help:    "Latency of event publish including broker confirm (legacy AMQP path).",
-		Buckets: prometheus.DefBuckets,
-	})
-
 	// ProcessDuration measures per-message worker processing time.
 	// Labels: channel (email|inapp|webhook).
 	// Deprecated: retained during migration; new dashboards should use
@@ -189,7 +180,6 @@ func init() {
 	prometheus.MustRegister(
 		MessagesPublished,
 		MessagesProcessed,
-		PublishDuration,
 		ProcessDuration,
 		StageIngestDuration,
 		EventsPublished,
