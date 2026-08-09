@@ -6,10 +6,19 @@ dockerfilePath = "deploy/Dockerfile.worker"
 startCommand = "/app/worker"
 # Zero-downtime rolling deploys rely on Kafka consumer-group rebalance:
 # when Railway boots the new instance, it joins the consumer groups and
-# the coordinator revokes partitions from the old instance. Our runner
-# uses BlockRebalanceOnPoll so revocation only happens between poll
-# cycles, i.e. after in-flight records have been committed. On SIGTERM
-# the runner then flushes any remaining committed offsets before exit.
+# the coordinator revokes partitions from the old instance.
+#
+# Two options make the handoff clean. BlockRebalanceOnPoll defers
+# revocation to the next AllowRebalance, and an OnPartitionsRevoked hook
+# then waits for every in-flight record to finish before the partition
+# actually moves (kworker.Runner.awaitInflightBeforeRevoke) — so the new
+# owner never starts on a record the old one is still processing. The wait
+# is bounded by the slowest record, worst case one sleeping out the 8s
+# retry backoff, well inside franz-go's 60s rebalance timeout.
+#
+# On SIGTERM the runner drains in-flight and exits. It deliberately does
+# NOT bulk-commit on the way out: anything not individually committed is
+# meant to be redelivered.
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
 

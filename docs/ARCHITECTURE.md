@@ -95,7 +95,8 @@ older clients calling `POST /dlq/replay` keep working.
 | `TransientError`, budget exhausted | produce to the DLQ topic, persist `dlq`, commit |
 | `PermanentError` | straight to the DLQ topic, persist `dlq`, commit |
 | Malformed JSON body | straight to the DLQ topic, commit (no row — the event never parsed) |
-| Duplicate (claim already held) | commit, **no row written** |
+| Duplicate (claim held **and** row present in PostgreSQL) | commit, no new row |
+| Claim held but **no** row in PostgreSQL | reprocess — the previous holder died mid-flight |
 
 `MaxRetries` is 3, so a record sees at most four delivery attempts.
 
@@ -103,6 +104,31 @@ The claim release on the retry path is load-bearing: the re-produced record
 carries the same `message_id` into the same lane, so leaving the claim in
 place would make every retry fail the dedup check and be dropped as a
 duplicate.
+
+The claim is also not trusted on its own. It is taken *before* the work, so
+its presence proves only that some worker started. A worker killed between
+the `SETNX` and the row write (SIGKILL, OOM, eviction) leaves a claim with
+no row, and skipping on that basis would drop the message for the full 24h
+TTL. The duplicate path therefore confirms against PostgreSQL — a
+primary-key lookup, and only on that path. Two workers racing the same
+record can both conclude "not done" and both deliver; that is the correct
+trade for an at-least-once pipeline, and the `(message_id, channel)` upsert
+keeps history single-rowed regardless.
+
+### Rebalance and shutdown
+
+`BlockRebalanceOnPoll` defers revocation to the next `AllowRebalance`, which
+the runner calls as soon as a batch is dispatched — while the pool is still
+working. An `OnPartitionsRevoked` hook therefore blocks the rebalance until
+in-flight records finish, so a partition never moves out from under a
+goroutine that is still processing it.
+
+On shutdown the runner drains in-flight and closes, but deliberately does
+not bulk-commit. franz-go refreshes its "uncommitted" set on every
+`PollFetches`, so committing it would also commit records the handler left
+uncommitted on purpose (a Redis error, a failed retry re-produce) and
+silently drop them. Every record that completed already committed its own
+offset.
 
 Webhook verdicts: 5xx and 429 are transient; other 4xx are permanent (the
 upstream is not going to start accepting it); a malformed URL is permanent.
