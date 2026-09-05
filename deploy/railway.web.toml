@@ -2,9 +2,21 @@
 builder = "DOCKERFILE"
 dockerfilePath = "deploy/Dockerfile.web"
 
-[build.args]
-NEXT_PUBLIC_API_URL = "https://nexus.odieyang.com"
-NEXT_PUBLIC_WS_URL = "wss://nexus.odieyang.com/ws"
+# NEXT_PUBLIC_* deliberately does NOT live here. Railway's config-as-code
+# [build] section only accepts builder / watchPatterns / buildCommand /
+# dockerfilePath / railpackVersion — a [build.args] block is silently
+# ignored, so the values looked set while the build actually saw nothing
+# and web/lib/api.ts fell back to http://localhost:8080.
+#
+# Set them as *service variables* on nexus-web instead. Railway injects
+# service variables into the build, and deploy/Dockerfile.web declares the
+# matching ARGs in the builder stage:
+#
+#   NEXT_PUBLIC_API_URL = https://nexus.odieyang.com
+#   NEXT_PUBLIC_WS_URL  = wss://nexus.odieyang.com/ws
+#
+# Next.js inlines NEXT_PUBLIC_* into the bundle at build time, so changing
+# either value needs a rebuild — a restart will not pick it up.
 
 [deploy]
 startCommand = "node server.js"

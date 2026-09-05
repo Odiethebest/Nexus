@@ -387,12 +387,29 @@ docker compose -f deploy/docker-compose.yml up -d
 | `nexus-web` | `deploy/railway.web.toml` | Dockerfile.web |
 | Kafka | External **Redpanda Cloud** dev cluster | KAFKA_BROKERS / SASL_SSL |
 
+Each service points its **Config as code** path (service → Settings) at its own file
+above. There is deliberately no `railway.toml` at the repo root: Railway reads a root
+config for *every* service that has not overridden the path, so one would silently
+hand all three services the producer's Dockerfile and deploy settings.
+
 **Important notes**:
 - Railway has no built-in Kafka; the app is expected to point at Redpanda Cloud (dev cluster free tier) via `KAFKA_BROKERS` + SASL_SSL. See `README.md` deployment section.
+- `KAFKA_BROKERS` has **no default** (`internal/kbroker/config.go`) — both the producer and the worker `os.Exit(1)` before the HTTP listener binds if it is unset. The healthcheck then times out, and because Railway only retires the old instance once the new one is healthy, the *previous* build keeps serving. A deploy can fail this way without the site ever going down.
 - Rolling deploys are zero-downtime: Railway waits for `/health` on the new instance before killing the old. On the Kafka side, consumer-group rebalance moves partitions between the old and new worker. See `RUNBOOK.md` for the exact validation procedure.
 - Root `nixpacks.toml` builds the producer binary only — it does **not** participate in Railway deployments (Railway uses Dockerfile)
 - `embed.FS` SPA fallback is **not implemented** — producer does not serve static files
-- `NEXT_PUBLIC_*` variables are injected at Railway **build time**, not runtime — set them before deploying
+- `NEXT_PUBLIC_*` variables are injected at Railway **build time**, not runtime, and must be set as **service variables** — the config file cannot carry them. Railway's `[build]` section accepts only `builder` / `watchPatterns` / `buildCommand` / `dockerfilePath` / `railpackVersion`; a `[build.args]` block parses but is ignored. `deploy/Dockerfile.web` declares the matching `ARG`s in its builder stage. Changing either value needs a rebuild, not a restart.
+
+**Verifying a deploy actually landed.** `/health` returning 200 proves only that *some*
+build is serving — it is green throughout a failed deploy. Confirm the new binary:
+
+```bash
+curl -s https://<producer>/metrics | grep '^go_info'                    # expect go1.25.x
+curl -s https://<producer>/metrics | grep -c nexus_events_published_total  # expect > 0
+curl -s https://<producer>/api/metrics/summary | grep -o e2e_lag_p99_seconds
+```
+
+`uptime_seconds` in the summary should also reset to near zero.
 
 ---
 

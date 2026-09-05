@@ -1,8 +1,0 @@
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "deploy/Dockerfile.producer"
-
-[deploy]
-startCommand = "/app/producer"
-healthcheckPath = "/health"
-healthcheckTimeout = 300

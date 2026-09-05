@@ -73,8 +73,13 @@ Cloud** dev cluster:
 
 Notes on the other config files:
 
-- A root `railway.toml` also exists and duplicates the producer profile; the
-  `deploy/` profiles are the source of truth.
+- There is no root `railway.toml`, on purpose. Railway applies a root config to
+  every service that has not overridden its **Config as code** path, so a root
+  file would hand the worker and web services the producer's Dockerfile. Point
+  each service at its own `deploy/` profile instead.
+- `NEXT_PUBLIC_*` cannot be set in the web profile: Railway's `[build]` section
+  ignores a `[build.args]` block. Set them as service variables on `nexus-web`
+  — `deploy/Dockerfile.web` already declares the matching `ARG`s.
 - Root `nixpacks.toml` builds the producer binary only and does **not**
   participate in Railway deploys (Railway uses the Dockerfiles).
 
