@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -234,6 +235,19 @@ func initLoadtestService() (*loadtest.Service, error) {
 	}
 	if strings.TrimSpace(guardCfg.AdminKey) == "" {
 		return nil, fmt.Errorf("LOADTEST_ADMIN_KEY must be set when loadtest is enabled")
+	}
+	// strconv.ParseFloat accepts "NaN" and "Inf", and a non-finite cap makes
+	// the budget check in loadtest.Service inert: every comparison against NaN
+	// is false, so neither the "unconfigured" branch (DailyVUHCap <= 0) nor the
+	// exceeded branch (used >= cap) ever fires, and the budget stops applying
+	// without saying so. Negative values are deliberately not rejected — they
+	// land in the <= 0 branch, which is the documented "no budget" setting.
+	//
+	// This runs after the !enabled early return on purpose: a deployment that
+	// has loadtest switched off must not fail to boot over a variable it never
+	// reads.
+	if vuhCap := serviceCfg.DailyVUHCap; math.IsNaN(vuhCap) || math.IsInf(vuhCap, 0) {
+		return nil, fmt.Errorf("LOADTEST_BUDGET_VUH_PER_DAY must be a finite number, got %v", vuhCap)
 	}
 
 	timeoutRaw := time.Duration(envconf.Int("LOADTEST_REQUEST_TIMEOUT_SECONDS", int(defaultLoadtestRequestTimeout.Seconds()))) * time.Second
