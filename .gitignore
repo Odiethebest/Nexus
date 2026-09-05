@@ -10,3 +10,4 @@
 
 # orchestration metadata (agent session artifacts, not project source)
 .context/
+MULTI_AGENT_WORKFLOW.md
