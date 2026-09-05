@@ -55,11 +55,11 @@ func TestAllTopicsAndDLQTopics(t *testing.T) {
 
 func TestNormalizeDLQTopic(t *testing.T) {
 	cases := map[string]string{
-		"nexus.dlq.email.high":   "nexus.dlq.email.high", // already normalized
-		"nexus.email.dlq.high":   "nexus.dlq.email.high", // legacy AMQP form
-		"nexus.webhook.dlq.low":  "nexus.dlq.webhook.low",
+		"nexus.dlq.email.high":       "nexus.dlq.email.high", // already normalized
+		"nexus.email.dlq.high":       "nexus.dlq.email.high", // legacy AMQP form
+		"nexus.webhook.dlq.low":      "nexus.dlq.webhook.low",
 		"  nexus.inapp.dlq.normal  ": "nexus.dlq.inapp.normal",
-		"random-string":          "random-string", // untouched
+		"random-string":              "random-string", // untouched
 	}
 	for in, want := range cases {
 		if got := NormalizeDLQTopic(in); got != want {

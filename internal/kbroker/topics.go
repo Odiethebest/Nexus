@@ -94,7 +94,7 @@ func NormalizeDLQTopic(name string) string {
 	// legacy form: nexus.<channel>.dlq.<priority>
 	const marker = ".dlq."
 	if idx := strings.Index(name, marker); idx > 0 && strings.HasPrefix(name, "nexus.") {
-		channel := name[len("nexus.") : idx]
+		channel := name[len("nexus."):idx]
 		priority := name[idx+len(marker):]
 		if channel != "" && priority != "" {
 			return fmt.Sprintf("nexus.dlq.%s.%s", channel, priority)

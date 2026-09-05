@@ -1,3 +1,6 @@
+// Package envutil loads a .env file from disk into the process environment.
+// Reading an individual environment variable back out, with a typed fallback,
+// is nexus/internal/envconf.
 package envutil
 
 import (

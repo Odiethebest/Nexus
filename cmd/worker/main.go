@@ -14,6 +14,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"nexus/internal/envconf"
 	"nexus/internal/envutil"
 	"nexus/internal/idempotency"
 	"nexus/internal/kbroker"
@@ -31,12 +32,12 @@ func main() {
 		slog.Info("loaded environment file", "path", path)
 	}
 
-	redisURL := getenv("REDIS_URL", "redis://localhost:6379")
-	pgDSN := getenv("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
+	redisURL := envconf.String("REDIS_URL", "redis://localhost:6379")
+	pgDSN := envconf.String("POSTGRES_DSN", "postgres://nexus:nexus@localhost:5432/nexus?sslmode=disable")
 
-	emailPool := parseInt(getenv("EMAIL_WORKER_POOL", "10"))
-	inappPool := parseInt(getenv("INAPP_WORKER_POOL", "5"))
-	webhookPool := parseInt(getenv("WEBHOOK_WORKER_POOL", "8"))
+	emailPool := parseInt(envconf.String("EMAIL_WORKER_POOL", "10"))
+	inappPool := parseInt(envconf.String("INAPP_WORKER_POOL", "5"))
+	webhookPool := parseInt(envconf.String("WEBHOOK_WORKER_POOL", "8"))
 
 	kcfg, err := kbroker.LoadConfig()
 	if err != nil {
@@ -65,13 +66,13 @@ func main() {
 	}
 
 	var m *mailer.Mailer
-	if smtpHost := getenv("SMTP_HOST", ""); smtpHost != "" {
+	if smtpHost := envconf.String("SMTP_HOST", ""); smtpHost != "" {
 		m = mailer.New(mailer.Config{
 			Host:     smtpHost,
-			Port:     getenv("SMTP_PORT", "587"),
-			Username: getenv("SMTP_USER", ""),
-			Password: getenv("SMTP_PASS", ""),
-			From:     getenv("EMAIL_FROM", "Nexus <no-reply@example.com>"),
+			Port:     envconf.String("SMTP_PORT", "587"),
+			Username: envconf.String("SMTP_USER", ""),
+			Password: envconf.String("SMTP_PASS", ""),
+			From:     envconf.String("EMAIL_FROM", "Nexus <no-reply@example.com>"),
 		})
 		slog.Info("mailer: SMTP configured", "host", smtpHost)
 	} else {
@@ -101,7 +102,7 @@ func main() {
 
 	// Expose Prometheus metrics on a dedicated port so Prometheus can scrape
 	// the worker independently from the producer.
-	metricsAddr := getenv("METRICS_ADDR", ":9091")
+	metricsAddr := envconf.String("METRICS_ADDR", ":9091")
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
@@ -165,13 +166,6 @@ func main() {
 		slog.Warn("kafka republisher close", "err", err)
 	}
 	slog.Info("all workers stopped")
-}
-
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 func parseInt(s string) int {

@@ -1,25 +1,14 @@
-package main
+package httpapi
 
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
-// The tests below exercise the handler newRouter actually returns. The
-// isolated withCORS tests further down all passed while the server was
-// serving an unconditional Access-Control-Allow-Origin: * — the allow-list
-// was built in main and then never attached. Asserting on the composed
-// router is what closes that gap.
-//
-// /health is used as the probe because it touches none of the routerDeps,
-// so the rest can stay nil.
-
-func newTestRouter(originsEnv string) http.Handler {
-	return newRouter(routerDeps{AllowedOrigins: parseAllowedOrigins(originsEnv)})
-}
-
+// requestWithOrigin is duplicated from cmd/producer/cors_test.go: the router
+// tests left behind there need it too, and the two files are now in different
+// packages, so neither can borrow the other's copy.
 func requestWithOrigin(method, path, origin string) *http.Request {
 	req := httptest.NewRequest(method, "http://api.example.com"+path, nil)
 	req.Host = "api.example.com"
@@ -29,83 +18,11 @@ func requestWithOrigin(method, path, origin string) *http.Request {
 	return req
 }
 
-func TestRouterEnforcesAllowListOnEveryRoute(t *testing.T) {
-	h := newTestRouter("https://app.example.com")
-
-	t.Run("trusted origin is echoed, never wildcarded", func(t *testing.T) {
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, requestWithOrigin(http.MethodGet, "/health", "https://app.example.com"))
-
-		if rr.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rr.Code)
-		}
-		if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
-			t.Errorf("Access-Control-Allow-Origin = %q, want the exact origin", got)
-		}
-		if got := rr.Header().Get("Vary"); !strings.Contains(got, "Origin") {
-			t.Errorf("Vary = %q, want it to include Origin (responses differ per origin)", got)
-		}
-	})
-
-	t.Run("untrusted origin is refused", func(t *testing.T) {
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, requestWithOrigin(http.MethodGet, "/health", "https://evil.example.com"))
-
-		if rr.Code != http.StatusForbidden {
-			t.Fatalf("status = %d, want 403", rr.Code)
-		}
-		if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
-			t.Errorf("Access-Control-Allow-Origin = %q, want empty for an untrusted origin", got)
-		}
-	})
-
-	t.Run("no Origin header passes through", func(t *testing.T) {
-		// curl, the in-repo loadgen, Prometheus scrapes, server-to-server.
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, requestWithOrigin(http.MethodGet, "/health", ""))
-
-		if rr.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 — non-browser clients must not be blocked", rr.Code)
-		}
-	})
-
-	t.Run("preflight advertises the admin-key header", func(t *testing.T) {
-		// POST /ops/loadtest/start reads X-Admin-Key. The old allow-all
-		// middleware only advertised Content-Type, so that preflight failed.
-		req := requestWithOrigin(http.MethodOptions, "/ops/loadtest/start", "https://app.example.com")
-		req.Header.Set("Access-Control-Request-Method", "POST")
-		req.Header.Set("Access-Control-Request-Headers", "X-Admin-Key")
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-
-		if rr.Code != http.StatusNoContent {
-			t.Fatalf("preflight status = %d, want 204", rr.Code)
-		}
-		if got := rr.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "X-Admin-Key") {
-			t.Errorf("Access-Control-Allow-Headers = %q, want it to include X-Admin-Key", got)
-		}
-	})
-}
-
-func TestRouterDefaultsToAllowAll(t *testing.T) {
-	// Zero-config demo behaviour must survive the rewiring.
-	h := newTestRouter("")
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, requestWithOrigin(http.MethodGet, "/health", "https://anywhere.example.com"))
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 with no allow-list configured", rr.Code)
-	}
-	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "https://anywhere.example.com" {
-		t.Errorf("Access-Control-Allow-Origin = %q, want the caller's origin echoed", got)
-	}
-}
-
 func TestLoadAllowedOriginsPrefersCORSEnvOverDeprecatedName(t *testing.T) {
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://new.example.com")
 	t.Setenv("LOADTEST_ALLOWED_ORIGINS", "https://old.example.com")
 
-	allowed := loadAllowedOrigins()
+	allowed := LoadAllowedOrigins()
 	if _, ok := allowed["https://new.example.com:443"]; !ok {
 		t.Errorf("CORS_ALLOWED_ORIGINS should win, got %v", allowed)
 	}
@@ -118,7 +35,7 @@ func TestLoadAllowedOriginsFallsBackToDeprecatedName(t *testing.T) {
 	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 	t.Setenv("LOADTEST_ALLOWED_ORIGINS", "https://old.example.com")
 
-	allowed := loadAllowedOrigins()
+	allowed := LoadAllowedOrigins()
 	if _, ok := allowed["https://old.example.com:443"]; !ok {
 		t.Errorf("existing deployments on the old name must keep working, got %v", allowed)
 	}
@@ -128,7 +45,9 @@ func TestLoadAllowedOriginsUnsetAllowsAll(t *testing.T) {
 	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 	t.Setenv("LOADTEST_ALLOWED_ORIGINS", "")
 
-	if _, ok := loadAllowedOrigins()[corsAllowAllMarker]; !ok {
+	// Asked through AllowsAll rather than by reading the map: that is the
+	// path main.go takes to decide whether to log the trust-everything warning.
+	if !AllowsAll(LoadAllowedOrigins()) {
 		t.Error("unset config should keep the zero-config allow-all demo behaviour")
 	}
 }
@@ -136,7 +55,7 @@ func TestLoadAllowedOriginsUnsetAllowsAll(t *testing.T) {
 // WebSocket handshakes bypass CORS entirely, so the upgrader has to be
 // handed the same policy or /ws stays open when the REST API is locked.
 func TestOriginCheckerMatchesHTTPPolicy(t *testing.T) {
-	check := originChecker(parseAllowedOrigins("https://app.example.com"))
+	check := OriginChecker(parseAllowedOrigins("https://app.example.com"))
 
 	if !check(requestWithOrigin(http.MethodGet, "/ws", "https://app.example.com")) {
 		t.Error("trusted origin should be allowed to upgrade")
@@ -170,7 +89,7 @@ func TestParseAllowedOrigins_AllowAllWhenEmpty(t *testing.T) {
 	if len(allowed) != 1 {
 		t.Fatalf("expected only wildcard marker, got %d entries", len(allowed))
 	}
-	if _, ok := allowed[corsAllowAllMarker]; !ok {
+	if !AllowsAll(allowed) {
 		t.Fatalf("expected wildcard allow-all marker for empty config")
 	}
 }
@@ -178,7 +97,7 @@ func TestParseAllowedOrigins_AllowAllWhenEmpty(t *testing.T) {
 func TestParseAllowedOrigins_AllowAllMarker(t *testing.T) {
 	allowed := parseAllowedOrigins("*, https://app.example.com")
 
-	if _, ok := allowed[corsAllowAllMarker]; !ok {
+	if !AllowsAll(allowed) {
 		t.Fatalf("expected wildcard allow-all marker to be present")
 	}
 	if _, ok := allowed["https://app.example.com:443"]; !ok {
