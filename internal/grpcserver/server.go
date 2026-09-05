@@ -36,9 +36,9 @@ func init() {
 
 type jsonCodec struct{}
 
-func (jsonCodec) Marshal(v interface{}) ([]byte, error)      { return json.Marshal(v) }
-func (jsonCodec) Unmarshal(b []byte, v interface{}) error    { return json.Unmarshal(b, v) }
-func (jsonCodec) Name() string                                { return "proto" }
+func (jsonCodec) Marshal(v interface{}) ([]byte, error)   { return json.Marshal(v) }
+func (jsonCodec) Unmarshal(b []byte, v interface{}) error { return json.Unmarshal(b, v) }
+func (jsonCodec) Name() string                            { return "proto" }
 
 // ── Request / response types (mirror proto/event.proto) ──────────────────────
 

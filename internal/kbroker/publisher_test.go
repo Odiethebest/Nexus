@@ -8,13 +8,13 @@ import "testing"
 
 func TestNormalizePriority(t *testing.T) {
 	cases := map[string]Priority{
-		"high":     PriorityHigh,
-		"HIGH":     PriorityHigh,
-		"normal":   PriorityNormal,
-		"":         PriorityNormal,
-		"garbage":  PriorityNormal,
-		"low":      PriorityLow,
-		"  low  ":  PriorityLow,
+		"high":    PriorityHigh,
+		"HIGH":    PriorityHigh,
+		"normal":  PriorityNormal,
+		"":        PriorityNormal,
+		"garbage": PriorityNormal,
+		"low":     PriorityLow,
+		"  low  ": PriorityLow,
 	}
 	for in, want := range cases {
 		if got := normalizePriority(in); got != want {
