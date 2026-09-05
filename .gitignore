@@ -7,3 +7,6 @@
 
 # Go test cache
 *.test
+
+# orchestration metadata (agent session artifacts, not project source)
+.context/
